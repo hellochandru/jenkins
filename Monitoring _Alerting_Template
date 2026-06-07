@@ -1,0 +1,146 @@
+Proactive Monitoring & Alerting Template - DevOps
+
+1. Objective
+Ensure DevOps proactively detects, monitors, and resolves issues across all environments before they impact other teams or customers.
+Focus areas include:
+* Monitoring automation
+* PagerDuty alerts
+* Structured communication
+* Actionable thresholds
+
+2. Monitoring Coverage
+Area
+
+	What to Monitor
+
+	Example Metrics / Checks
+
+Pods
+	Readiness, CrashLoopBackOff, Pending, ImagePullBackOff
+	kube_pod_status_ready, kube_pod_container_status_waiting_reason
+
+Nodes
+	CPU, Memory, Disk, Network Pressure
+	node_cpu_seconds_total, node_memory_MemAvailable_bytes
+
+Databases
+	Connection health, replication lag, storage capacity
+	Postgres exporter metrics, error logs
+
+Airflow
+	DAG failures, Scheduler health, Worker status
+	DAG run failures, scheduler uptime, worker restarts
+
+Logging
+	Fluent Bit ingestion errors, dropped logs
+	Fluent Bit error counters, Loki ingestion failures
+
+Storage
+	PVC usage, disk running out of space
+	kubelet_volume_stats_used_bytes, vm_free_disk_space_bytes
+
+3. Monitoring Scope Breakdown
+Databases & Storage
+* PostgreSQL (keystone, airflow, superset): Connection health, replication lag, WAL growth
+* ClickHouse: Query load, memory usage, migration issues
+* RabbitMQ: Queue depth, memory usage
+* PVCs: Usage %, bound capacity
+Services & Applications
+* Airflow: DAG failures, scheduler downtime, worker restarts
+* Internal APIs: Auth failures, request errors
+* UI Apps: Page load times, service errors
+* Logging Pipelines: Fluent Bit & Loki ingestion delays, dropped logs
+Nodes
+* CPU usage trends
+* Memory saturation
+* Network pressure
+* Disk I/O errors
+Alerting
+* PagerDuty escalation triggers
+* Error types
+* Alert grouping and routing by severity
+
+4. When to Worry – Alert Thresholds
+Alert Level
+
+	Condition
+
+	Example Actions
+
+🔴 Red (Critical)
+	Metric exceeds 80% of capacity
+	Immediate action. PagerDuty alert triggered. Investigate CPU, memory, disk issues.
+
+🟠 Orange (Warning)
+	Metric between 60%–80%
+	Investigate soon. No PagerDuty unless sustained. Review logs and trends.
+
+🟢 Green (Normal)
+	Metric below 60%
+	No action needed. Continue monitoring.
+
+Threshold Examples
+Metric
+
+	🟢 Green (<60%)
+
+	🟠 Orange (60–80%)
+
+	🔴 Red (>80%)
+
+CPU Usage
+	Stable
+	Monitor
+	Immediate fix
+
+Memory Usage
+	Stable
+	Monitor allocation
+	Risk of OOM
+
+PVC Disk Usage
+	Safe
+	Watch for spikes
+	Free up/expand
+
+Replication Lag
+	Normal
+	Monitor
+	Fix immediately
+
+5. Commands for Manual Monitoring
+Pod & Node Health
+kubectl get pods -n <namespace>
+ kubectl describe pod <pod-name> -n <namespace>
+ kubectl get nodes
+ kubectl top pods -n <namespace>
+ kubectl top nodes
+
+Logging Verification
+
+ kubectl logs <pod-name> -n <namespace>
+ kubectl logs -f <pod-name> -n <namespace>
+
+Storage Checks
+
+ kubectl get pvc -n <namespace>
+ df -h
+
+6. PagerDuty Alerts, Escalations & Policies
+* Alerts grouped by severity
+* Primary on-call escalation within 15 minutes
+* Emergency escalation after 1 hour
+* Dummy pods simulate failures to test routing
+
+7. Communication Process
+* Acknowledge PagerDuty alerts immediately
+* Share updates via JIRA
+* Post-incident summary and corrective actions
+
+8. Continuous Improvement
+* Quarterly review of metrics and thresholds
+* Document lessons learned
+* Keep Confluence updated with rule/responsibility changes
+
+📌 Note:
+This guide applies to Dev, QA, Staging, and Production environments
