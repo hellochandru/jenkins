@@ -1,0 +1,14 @@
+Core Automation Components
+1.1 CI/CD Pipeline (Jenkins)
+* Dev: Trigger on every commit → run unit tests, static code analysis
+* QA: Trigger on merge to develop → run integration tests, deploy to QA
+* Staging: Trigger on merge to release → run E2E tests, deploy to staging
+* Pre-Prod: Trigger on approval → smoke testing, UAT
+* Prod: Trigger on approval or tag → deploy with canary/blue-green strategy
+
+1.2 Test Automation in each environment
+* Unit Tests: Run in Dev
+* Integration/Functional Tests: Run in QA
+* E2E Tests / Regression: Run in Staging
+* Performance & Load Tests: Run in Pre-Prod
+* Sanity Tests: Run in Prod post-deplo
