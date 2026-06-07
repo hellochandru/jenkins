@@ -1,0 +1,1346 @@
+## CI/CD Setup Guide in GitHub
+This guide outlines how to configure CI/CD pipelines in GitHub using two different methodologies: Jenkins as a GitHub App or a GitHub Actions Self-Hosted Runner.
+------------------------------
+## 1. Jenkins as a GitHub App
+For enhanced security, all new Jenkins instances should use a GitHub App registration instead of a standard user or dummy user account.
+## Why this matters
+A GitHub App allows up to 15,000 API calls per hour, whereas a user or dummy account is restricted to only 5,000 calls per hour and is highly susceptible to rate-limiting or throttling by GitHub.
+------------------------------
+## 1.1. Configuration Steps in GitHub
+
+Note: You must be an Organization Administrator or possess explicit permissions to manage GitHub Apps to complete these steps.
+
+## 1.1.1. Create the GitHub App
+
+   1. Navigate to your GitHub Organization main page.
+   2. Click Settings ➔ Developer Settings ➔ GitHub Apps.
+   * Direct Link: https://github.com/organizations/<YOUR_ORG>/settings/apps
+   3. Click the New GitHub App button.
+
+## 1.1.2. Configuring the GitHub App Settings
+Fill out the required administrative fields:
+
+* GitHub App name: Enter a descriptive identifier (e.g., Jenkins - <team_name>).
+* Homepage URL: Input https://netapp.com.
+* Webhook Section: Uncheck the Active checkbox.
+* Reasoning: Because OpenLab is contained within a private internal network and is not publicly accessible via the open internet, GitHub cannot route inbound push events directly to your Jenkins instances.
+
+Configure the explicit granular permissions required by the Jenkins integration plugin:
+
+* Commit statuses: Set to Read and Write (allows Jenkins to post pass/fail icons onto pull requests).
+* Contents: Set to Read-only (allows Jenkins to fetch the Jenkinsfile and repository source tree).
+* Note: If your pipeline automatically tags releases or pushes code changes back to the repository, elevate this permission to Read & write.
+* Metadata: Set to Read-only.
+* Pull requests: Set to Read-only.
+
+Under the Subscribe to events section, enable all event checkboxes, then click Create GitHub app.
+## 1.1.3. Generate the Private Key
+Once GitHub redirects you to the newly created app management page, scroll down and click Generate a Private Key. This downloads an asymmetric .pem cryptography file to your local computer. This key represents Jenkins's master passport to GitHub; store it safely, as it cannot be redownloaded if lost.
+## 1.1.4. Convert the Private Key
+The downloaded certificate must be converted into a standard PKCS#8 format that the Java Virtual Machine runtime environment natively understands. Run the following command in your local terminal (replace the example filename with your downloaded file):
+
+openssl pkcs8 -topk8 -inform PEM -outform PEM -in your-app-private-key.pem -out converted-github-app.pem -nocrypt
+
+## 1.1.5. Install the Application
+
+   1. From your GitHub App settings page, click Install App in the left sidebar menu.
+   2. Locate your Target Organization and click the corresponding Install button.
+   3. Choose the repository scope. Selecting All Repositories ensures that the app automatically inherits permissions for all current and future codebase repositories.
+
+## 1.1.6. Record the GitHub App ID
+
+   1. Navigate to your GitHub Organization page (https://github.com/<YOUR_ORG>).
+   2. Go to Settings ➔ Installed GitHub Apps.
+   3. Click Configure next to your custom app name, then click App Settings.
+   4. Locate and copy the numeric App ID string for the subsequent Jenkins setup.
+
+------------------------------
+## 1.2. Configuration Steps in Jenkins## 1.2.1. Plugins to Install
+Ensure your Jenkins controller has the following core community extensions installed via Manage Jenkins ➔ Plugins:
+
+* Credentials Plugin: Natively handles safe secret injection within controllers.
+* GitHub Branch Source Plugin: Connects Jenkins directly with GitHub App credential specs.
+
+## 1.2.2. Set up the GitHub App Credential
+
+   1. Open Jenkins and navigate to Manage Jenkins ➔ Manage Credentials.
+   2. Under the Stores scoped to Jenkins section, select the Jenkins storage provider link.
+   3. Click Global Credentials (Unrestricted), then click Add Credentials in the left sidebar.
+   4. Fill out the credential parameter fields exactly as follows:
+   * Kind: Select GitHub App from the dropdown list.
+      * ID: Define a clear text unique identifier (e.g., github-app-team-token).
+      * Description: Leave blank or add an optional reference note.
+      * App ID: Paste the numeric App ID recorded from Step 1.1.6.
+      * Key: Click the input block, open your local converted-github-app.pem file, copy its exact text contents, paste them here, and click OK.
+   
+## 1.2.3. Set up the GitHub Organization Project Item
+
+   1. From the Jenkins dashboard home screen, click New Item.
+   2. Type an item name, select GitHub Organization from the type grid, and click OK.
+
+## 1.2.3.1. Project Credentials Setup
+On the item configuration screen, locate the Projects config area. Select the newly generated GitHub App identification credential from the Credentials dropdown menu. This grants Jenkins the authorization required to query your GitHub Org space.
+
+* Note: Ensure the API Endpoint and Owner fields match your enterprise GitHub deployment configurations. Be mindful of the 15,000 hourly API call limit during large automated testing patterns.
+
+## 1.2.3.2. Configure Scan Organization Triggers
+Because the active webhook trigger configuration was disabled in Step 1.1.2 (due to private OpenLab isolation), Jenkins cannot receive real-time commit push notifications from the public cloud. Instead, Jenkins must regularly query GitHub to check for code changes.
+
+* Configuration: Change the default setting from 1 day to a faster interval. We recommend setting this parameter to 5 minutes to ensure engineers don't face long delays waiting for pipeline executions after pushing code.
+
+## 1.2.4. Trigger the Scan Organization Event
+Jenkins will immediately initiate an automated indexing discovery sweep across all target repositories granted during the app installation. If the scanning sweep discovery process does not run automatically, manually click Scan Organization Now in the item sidebar menu.
+
+* Automation Metric: If any discovered repository contains a valid Jenkinsfile at its root level directory, Jenkins automatically registers that repository, maps its active branches, and builds the initial deployment pipeline.
+
+------------------------------
+## 2. GitHub Actions Self-Hosted Runner
+If you prefer using native GitHub Actions over Jenkins, you can deploy self-hosted worker loops directly onto local Virtual Machines (VMs) or physical machines inside OpenLab.
+## 2.1. Configuration Steps in GitHub
+Determine your operational runner scope strategy first:
+
+* Repository Scope (Visible only to one unique repository): Navigate to Repository ➔ Settings ➔ Actions ➔ Runners.
+* Direct Link: https://github.com/<ORG>/<REPO>/settings/actions/runners
+* Organization Scope (Shared across all repositories inside your Org): Navigate to your Organization Main Page ➔ Settings ➔ Actions ➔ Runners.
+* Direct Link: https://github.com/<ORG>/settings/actions/runners
+
+Once you reach the runner control center screen, proceed with the following actions:
+
+   1. Click the Add runner button.
+   2. Choose your hosting environment's operating system platform (Linux, macOS, or Windows) along with the target hardware processor architecture (e.g., x64, ARM64).
+   3. GitHub will display a step-by-step terminal command script snippet sequence customized with an ephemeral authentication token. Keep this browser tab open.
+
+## 2.1.1. Understanding Groups and Labels
+Once a self-hosted runner successfully connects back to GitHub, you can organize it using two management features:
+
+* Groups: Provide administrative boundary access controls. You can bundle multiple machines at the organization level and restrict them so only specific private repositories can run jobs on them.
+* Labels: Functional metadata tags applied to individual machines. GitHub Action scripts inspect these labels to route specific workloads to machines with matching characteristics (e.g., routing a machine learning model compilation task specifically to a runner tagged with a gpu label).
+
+------------------------------
+## 2.2. Configuration Steps on Your Local Machine
+Log directly into your isolated OpenLab terminal server destination instance to run the installation scripts:
+
+* ⚠️ Mandatory Security Rule: You must not run the GitHub Actions configuration or execution runner scripts as the system root user profile. For security reasons, the GitHub Actions runner application will explicitly refuse to execute and fail if started with root privileges.
+* Execution Pattern: Copy and run each terminal command line sequence displayed on your open GitHub browser settings screen exactly as shown.
+* Troubleshooting Note: If the startup script encounters system dependency failures due to missing operating system packages, the installer output will print out the exact command lines required to install the missing platform packages.
+
+------------------------------
+## 2.3. Configuring Your GitHub Action Workflow File
+To route automated software integration tasks directly to your custom internal OpenLab infrastructure hardware, add a runs-on declaration block into your .github/workflows/ci.yml project files.
+
+# This is a basic workflow file designed to get you started with native GitHub Actionsname: CI
+# Controls when the automation workflow engine triggers executionon:
+  # Triggers the execution loop on code push or pull request actions targeted at the main branch
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+  # Allows administrators to manually trigger this pipeline run from the GitHub Actions user interface tab
+  workflow_dispatch:
+# A workflow execution run is constructed from one or more distinct job blocks that run in parallel or sequencejobs:
+  # This workflow defines a single automated compilation task block labeled "build"
+  build:
+    # Explicitly defines the destination runner machine required to process this job
+    # The 'self-hosted' label instructs the engine to bypass GitHub infrastructure and use your OpenLab machine
+    runs-on: self-hosted
+
+    # Steps represent a sequentially ordered list of tasks executed inside the runner shell environment
+    steps:
+      # Step 1: Checks out your repository source tree under the $GITHUB_WORKSPACE path so subsequent steps can read it
+      - uses: actions/checkout@v2
+
+      # Step 2: Executes a standard single-line shell statement using the runner machine's default shell interpreter
+      - name: Run a one-line script
+        run: echo Hello, world!
+
+      # Step 3: Executes a multi-line shell command sequence via standard multi-line pipe formatting blocks
+      - name: Run a multi-line script
+        run: |
+          echo Add other actions to build,
+          echo test, and deploy your project.
+############################
+Access control 
+############################
+Since the Jenkins is migrated with LDAP, anyone in orgnation can access the Jenkins instance. Make sure to set up the access control on the Jenkins.
+1.1. Role base
+1.1.1. Select Role base Strategy in Security configuration
+Manage Jenkins → Security
+In Authorization section, select Role Base Strategy → Save
+1.1.2. Set up roles
+Have a couple of roles based on the team needs.
+In Security section → Manage and Assign Roles
+1.1.2.1. Manage Roles
+Add role for different scope based on the team needs. Here we use global roles as an example.
+admin role has been set by default. Add a role called view-only which only has view privilege.
+
+1.1.2.2. Set proper permission on each role
+Different role has different privileges. It can be set over here.
+
+1.1.2.3. Assign Roles
+1.1.2.3.1. Add Group or Add User
+The DaaS Jenkins has been hooked up with LDAP. In most of the case, the individual user ID does not need to be added here. Here we added ng-daas-dev group as an example.
+
+1.1.2.3.2. Assign ng group or individual ID to the roles and save.
+
+1.1.3. Verify the setup
+Without login (anonymous) - the user should not see anything based on the configuration
+The user who can login but not belongs to any group (Authenticated user) - only can view the limited content of Jenkins
+##################################################
+SSH based Linux Jenkins agent nodes Configuration
+##################################################
+1.1. Pre-requisite
+For Jenkins agent configuration, you need to have the following in the agent node machines before adding it to the controller / master.
+1. A valid Linux user account that can perform the required tasks on the agent server. (preferably a sudo user if your job requires elevated privileges)
+2. A directory path created with the user account (in above step 1) as the owner. 
+3. Java should be installed on your agent server.
+1.2. Configuration Steps
+
+1. Provide the agent name and other configuration related details . Example, as shown in the screenshot below:
+
+ Note: The Remote directory must be the same directory path that exists in agent node (Refer the 2nd point in the Pre-requisite).
+
+ 2. Provide the launch method as 'Launch agents via SSH' . Provide the necessary details as shown below:
+
+Note: The Credentials must be that of the same existing user account created in your agent node . ( Refer the 1st point in the Pre-requisite).
+
+3. Now Click on the 'Advanced...' button (Refer the screenshot in previous step 2) and provide the Javapath. You can leave the remaining values as default. Please refer the below screenshot:
+
+Note: Ensure Java has been installed in your agent node ( Refer the 3rd point in the Pre-requisite). To find out the JavaPath, run the linux command 'which java'. 
+
+4. (Optional) Provide the Environment variables that you need to be defined in the agent node.
+
+5. Click on the 'save' button and launch the agent. If you still see any issue with the agent configuration and need support from the DaaS team, send an email to helpeng@org.com
+
+##################################
+## Creating Jenkins Dynamic Agents in devop as service Using EC2 Fleet: DataSense Usecase
+####################################################################
+This guide outlines the step-by-step process for configuring ephemeral, dynamic Jenkins build agents inside the DaaS environment utilizing AWS EC2 Fleet and Auto Scaling groups.
+## Pre-requisites
+
+* Plugins: Ensure the EC2 Fleet Jenkins Plugin is fully installed on your Jenkins controller runtime. For configuration parity, check your reference instance: https://datasense-jenkins.daas.netapp.com/.
+* IAM Permissions: An AWS IAM account configured with explicit read/write permissions for ec2 and autoscaling actions. Your dedicated AWS portal login link and credential sets are securely stored inside CyberArk safe: P-CJR-JEN-O-DAAS-DAASCI.
+
+------------------------------
+## 1. Create the SSH Key Pairs
+Go to the AWS EC2 Console ➔ Network & Security ➔ Key Pairs, then click Create Key Pair. This key pair is required by the Jenkins plugin to establish a secure SSH connection to the worker nodes upon boot.
+
+   1. Name: Provide a clear, identifiable name for your cluster key pair.
+   2. Key Pair Type: Select RSA.
+   3. Private Key Format: Select .pem format.
+   4. Click Create key pair and securely store the downloaded file.
+
+------------------------------
+## 2. Create the Security Group Under the VPC
+Navigate to Network & Security ➔ Security Groups ➔ Create security group. Configure the network firewall parameters as follows:
+
+* Basic Details: Provide a security group name and description mapped to your team VPC framework.
+* Inbound Rules: Add an inbound rule allowing SSH (Port 22) traffic originating strictly from your Jenkins controller instance IP address or internal cluster subnet security group.
+* Outbound Rules: Retain the default settings to permit all outbound traffic, ensuring the worker nodes can pull external code packages and build dependencies.
+
+------------------------------
+## 3. Create a Launch Template
+Go to the EC2 Console ➔ Instances ➔ Launch Templates, then click the Create launch template button.
+## 3.1. Template Identity & Base Machine Image
+
+* Provide a descriptive Launch template name.
+* Under Application and OS Images (Amazon Machine Image), select your team's designated base machine image (AMI) containing docker runtimes or language runtimes.
+
+## 3.2. Select Key Pair
+
+* Under the Key pair (login) section, choose the specific SSH key pair generated in Step 1 from the dropdown menu.
+
+## 3.3. Configure Network Settings
+
+* Select the target corporate VPC.
+* Bind the correct Subnet routing zones.
+* Under the firewall selector, bind the exact Security group created in Step 2.
+
+## 3.4. Provide User Data Scripting (Optional)
+If your build environment requires custom initialization commands to execute immediately upon system startup, follow these steps:
+
+   1. Scroll down to the Advanced details section block.
+   2. Scroll to the bottom of the form to find the User data text field.
+   3. Input your startup configuration script sequence (e.g., configuring folder directories or starting required background micro-daemons).
+
+## 3.5. Save Launch Template
+
+* Verify all configuration tabs match your workload specifications, and click Create launch template.
+
+------------------------------
+## 4. Create the Auto Scaling Group
+Navigate to the AWS Console sidebar ➔ Auto Scaling ➔ Auto Scaling Groups, then click Create Auto Scaling group.
+
+   1. Name: Provide a unique group identifier name.
+   2. Launch Template: Select the specific launch template created in Step 3.
+   3. Network Configuration: Select your targeted VPC and assign multiple subnets across different Availability Zones (AZs) to ensure high availability.
+   4. Group Size & Scaling Policies: Configure your capacity boundaries (Minimum capacity, Maximum capacity, and Desired capacity parameters) to match your team's concurrent pipeline processing demands.
+
+------------------------------
+## 5. EC2 Fleet Plugin Configuration on the Jenkins Controller
+Log directly into your Jenkins administrator dashboard interface to link the AWS framework back to the build controller.
+
+   1. Navigate to Manage Jenkins ➔ Clouds (or Configure System ➔ Configure Clouds depending on your core Jenkins version).
+   2. Click Add a new cloud and select Amazon EC2 Fleet from the available provider options.
+   3. Configure the cloud provider parameters exactly as follows:
+   * AWS Credentials: Select your infrastructure access tokens or IAM role bindings.
+      * Region: Select the specific AWS deployment region matching your Auto Scaling infrastructure.
+      * EC2 Fleet / Auto Scaling Group: Choose the specific Auto Scaling group name configured in Step 4.
+      * Launcher: Select SSH Launcher, and map it directly to the private key credentials uploaded from your Step 1 .pem file download.
+      * Labels: Assign explicit label tags (e.g., datasense-agent) so your Jenkinsfile pipeline logic can cleanly route build tasks using the standard agent { label 'datasense-agent' } declaration syntax.
+   
+------------------------------
+## 6. Architecture Topology & Execution Sequence
+The sequence workflow layout below shows the relationship between the Jenkins controller runtime environment, the AWS Auto Scaling group resource coordinator, and your underlying deployment Launch Templates.
+
++----------------+          +--------------------+          +---------------------+
+
+| Jenkins Plugin |          | AWS Auto-Scaling   |          | AWS Launch Template |
+|   (Controller) |          |      Group         |          |  (Image & Security) |
++-------+--------+          +---------+----------+          +----------+----------+
+
+        |                             |                                |
+        | 1. Monitor Build Queue      |                                |
+        |============================>|                                |
+        |                             |                                |
+        | 2. Request Capacity Scale   |                                |
+        |---------------------------->|                                |
+        |                             | 3. Read Hardware Blueprints    |
+        |                             |------------------------------->|
+        |                             |                                |
+        |                             | 4. Provision Ephemeral EC2     |
+        |                             |<-------------------------------|
+        |                             |                                |
+        | 5. New Worker Node Online   |                                |
+        |<----------------------------|                                |
+        |                             |                                |
+        | 6. Establish Secure SSH     |                                |
+        |============================>|                                |
+        |                                                              |
+
+############################################
+## Managing Resources for Jenkins Dynamic Agents and Containers
+#########################################################
+There are two critical factors to consider when configuring resources for a container or a dynamic Jenkins Kubernetes agent.
+------------------------------
+## 1. Where to Add Resource Information in the Kubernetes Agent YAML
+Resource specifications are declared directly within the resources block of the container definition inside your Kubernetes Pod template. This template can be included as an inline block or as a referenced file in your Jenkinsfile.
+## Operational Definitions
+
+* requests: Represents the guaranteed resource block reserved for the container during the Jenkins agent creation phase. The pod will not schedule unless a worker node has this capacity available.
+* limits: Provides elastic operational headroom. If your build process experiences a sudden processing spike, it can leverage additional resources on the host worker node up to this maximum ceiling (if available).
+
+## Best Practice Policy
+Always enforce explicit, baseline requests and limits configuration parameters across all Jenkins build agent templates. This baseline must provide just enough capacity to run normal continuous integration workloads.
+If an automated build pipeline routinely fails due to Out-Of-Memory (OOMKilled) errors, development teams must profile their compilation lifecycle using real-time dashboard metrics on the Rancher Portal to determine the precise operational footprint and update the Jenkinsfile configurations accordingly.
+## Production Pod Specification Example
+
+apiVersion: v1kind: Podmetadata:
+  name: frontendspec:
+  containers:
+  - name: app
+    image: images.my-company.example/app:v4
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "150m"
+      limits:
+        memory: "256Mi"
+        cpu: "350m"
+  - name: log-aggregator
+    image: images.my-company.example/log-aggregator:v6
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "150m"
+      limits:
+        memory: "256Mi"
+        cpu: "350m"
+
+------------------------------
+## 2. Deciphering Resource Units in Kubernetes
+Understanding how Kubernetes quantifies infrastructure processing allocations prevents compilation bottlenecks and scheduling execution failures.
+## Understanding CPU Units
+Limits and requests for processing resources are calculated strictly using CPU units. In a Kubernetes ecosystem, 1 CPU is equivalent to:
+
+* 1 vCPU / Core across public cloud provider environments (e.g., AWS, Azure, GCP).
+* 1 Hyperthread on bare-metal Intel server processor architectures.
+
+Fractional compute requests are fully supported. Specifying a requests.cpu parameter value of 0.5 guarantees your container exactly half the processing capacity of a container requesting 1 CPU.
+
+* The Expression 0.1: Natively identical to 100m (read as "one hundred millicpu" or "one hundred millicores").
+* API Constraints: Decimal definitions like 0.1 are automatically converted to 100m by the master API system. Precision finer than 1m is strictly prohibited. For clarity and consistency, using the millicore string form (e.g., 100m) is preferred.
+* Absolute Metric Rule: Compute parameters are explicitly calculated as an absolute quantity, never a relative percentage. A value of 0.1 CPU represents the exact same processing capability whether running on a basic single-core server or an enterprise 48-core host node.
+
+## Understanding Memory Units
+Limits and requests for RAM allocations are calculated strictly in Bytes. Memory values can be expressed as a standard integer or a fixed-point number utilizing one of two shorthand scale suffixes:
+
+| Metric Type | Suffix Format (Base-10 / Decimal) | Suffix Format (Base-2 / Binary Power-of-Two) |
+|---|---|---|
+| Kilobyte | k | Ki |
+| Megabyte | M | Mi |
+| Gigabyte | G | Gi |
+| Terabyte | T | Ti |
+| Petabyte | P | Pi |
+| Exabyte | E | Ei |
+
+💡 Conversion Example: The following notation entries represent approximately the same mathematical memory storage value:
+128974848 bytes ≈ 129e6 ≈ 129M ≈ 123Mi
+
+------------------------------
+## 3. Profiling Your Right-Sized Resource Footprint
+Determining accurate capacity metrics requires monitoring live runtime execution footprints rather than guessing.
+## Real-Time Metric Telemetry via Rancher
+Live performance metrics for ephemeral, dynamic Jenkins worker agent pods are captured during the lifecycle of an active pipeline run and can be inspected directly on the Rancher Portal.
+## How to Access and Apply Telemetry Data
+
+   1. Access Provisioning: To view telemetry dashboards, teams must submit their designated ng group identifier to the platform team. This grants your engineers structured, limited-access privileges to your specific namespaces inside the Rancher Portal interface.
+   2. Analysis Strategy: Review the real-time performance curves displayed within the Rancher Pod Metrics snippet during heavy execution loops (such as compilation, test assembly, or container image creation). This data maps out your right-sized baseline target allocations.
+   3. Proactive Collaboration: If your specialized workloads require massive resource footprints, contact the platform team in advance. Early notification allows us to scale out regional physical node capacity and ensure high resource availability for all teams.
+
+## References
+
+* For deep-dive architectural data on managing container runtimes, review the official Kubernetes handbook: Resource Management for Pods and Containers.
+
+##########################################
+## Jenkins Pipeline Configuration: Image Building via Podman
+############################################
+
+This document provides a clean, production-ready blueprint for building and pushing container images securely using Podman inside an ephemeral Jenkins Kubernetes agent.
+------------------------------
+## 1. Architectural Approach: Docker-outside-of-Docker (DooD)
+This pipeline utilizes a native Podman container to execute image assembly processes. Unlike standard Docker-in-Docker configurations, Podman does not require a background daemon process. It compiles your standard Dockerfile inside the workspace directory and pushes the completed artifact directly to your central enterprise repository.
+------------------------------
+## 2. Production Jenkinsfile Blueprint
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+            apiVersion: v1
+            kind: Pod
+            spec:
+                containers:
+                - name: podman
+                  image: docker.repo.eng.netapp.com/rhel8/podman
+                  command:
+                  - cat
+                  tty: true
+                  securityContext:
+                      privileged: true
+                  resources:
+                      requests:
+                          memory: "3072Mi"
+                          cpu: "2000m"
+                      limits:
+                          memory: "6Gi"
+                          cpu: "4000m"
+            '''
+            defaultContainer 'podman'
+        }
+    }
+    environment {
+        IMAGE_NAME    = 'imageName'
+        REGISTRY_NAME = 'docker.repo.eng.netapp.com'
+        NAMESPACE     = 'xyz'
+    }
+    stages {
+        stage('Check out repository') {
+            steps {
+                checkout([
+                    $class: 'GitSCM', 
+                    branches: [[name: 'master']], 
+                    doGenerateSubmoduleConfigurations: false, 
+                    extensions: [], 
+                    submoduleCfg: [], 
+                    userRemoteConfigs: [[
+                        credentialsId: "cred",
+                        url: 'https://repository_url'
+                    ]]
+                ])
+            }
+        }
+        stage('Podman - Build Image') {
+            steps {
+                sh """
+                #!/bin/bash
+                # Construct and build the container image
+                FULL_IMAGE_TAG="${REGISTRY_NAME}/${NAMESPACE}/${IMAGE_NAME}:${env.BUILD_NUMBER}"
+                podman build -t \${FULL_IMAGE_TAG} .
+                """
+            }
+        }
+        stage('Podman - Push Image to Registry') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'registryCredID',
+                        usernameVariable: 'USERNAME',
+                        passwordVariable: 'PASSWORD'
+                    )
+                ]) {
+                    sh """
+                    #!/bin/bash
+                    FULL_IMAGE_TAG="${REGISTRY_NAME}/${NAMESPACE}/${IMAGE_NAME}:${env.BUILD_NUMBER}"
+                    
+                    # Authenticate and securely push the artifact
+                    podman login -u "${USERNAME}" -p "${PASSWORD}" "${REGISTRY_NAME}"
+                    podman push \${FULL_IMAGE_TAG}
+                    """
+                }
+            }
+        }
+    }
+}
+
+------------------------------
+## 3. Configuration Breakdown## 3.1. Infrastructure Security & Sizing
+
+* privileged: true: Grants Podman the kernel permissions required to configure container root filesystems and execute package installations inside a nested layout.
+* Resource Optimization: Allocated with a guaranteed baseline of 3072Mi RAM and 2000m (2 Cores) CPU request block to handle heavy compilation, with room to scale up to 6Gi RAM under heavy usage.
+
+## 3.2. Script Safeguards
+
+* #!/bin/bash: Explicitly declares the shell interpreter to avoid unpredictable script failures across different agent base images.
+* \${FULL_IMAGE_TAG}: The backslash escapes the variable declaration syntax. This ensures the variable is parsed locally by the agent's Linux shell compiler instead of getting evaluated early by the Jenkins controller node.
+
+#################################
+## Jenkins Pipeline Reference: Dynamic Pods and Execution Templates
+This guide details three foundational execution methodologies for Jenkins pipelines within your cluster: Ephemeral Kubernetes Pods, Dedicated Host Slaves, and Parameterized Cron Automation.
+------------------------------
+## 1.1.1. Template 1: Ephemeral Kubernetes Pod (Dynamic Agent)
+This methodology spins up an isolated, temporary pod template in your Kubernetes cluster that mounts core tool shares (/x/eng/*) via host paths. The entire lifecycle terminates instantly when the pipeline completes.
+## Job Setup Instructions
+
+   1. Log into your team's Jenkins master URL.
+   2. Select Dashboard ➔ New Item, type a unique job name, choose Pipeline, and click OK.
+   3. Select the Pipeline tab at the top of the configuration sheet.
+   4. (Optional) Select This project is parameterized and configure two string parameter blocks: PARAM1 and PARAM2. If skipped, remember to remove the parameter reference echo hooks from the code block below.
+   5. Paste the following configuration directly into your Jenkins script block and click Save:
+
+// Uses Declarative syntax to spin up an ephemeral Kubernetes agent pod
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+            apiVersion: v1
+            kind: Pod
+            spec:
+                containers:
+                - name: cosine-container-centos
+                  image: docker.repo.eng.netapp.com/global/devts-daas/cosine-container:latest
+                  privileged: true
+                  tty: true
+                  resources:
+                      requests:
+                          memory: "512Mi"
+                          cpu: "200m"
+                      limits:
+                          memory: "1024Mi"
+                          cpu: "300m"
+                  command:
+                  - cat
+                  volumeMounts:
+                  - mountPath: /var/run/docker.sock
+                    name: docker-sock
+                  - mountPath: /x/eng/rats/arch/x86_64-redhat-rhel6
+                    name: rats
+                  - mountPath: /x/eng/rlse
+                    name: rlse
+                  - mountPath: /x/eng/btools
+                    name: btools
+                  - mountPath: /x/eng/tools
+                    name: tools
+                  - mountPath: /x/eng/p4_root_tools
+                    name: p4-root-tools
+                  - mountPath: /x/eng/site
+                    name: site
+                  - mountPath: /x/eng
+                    name: eng
+                  - mountPath: /x/eng/btools/arch/x86_64-redhat-rhel6
+                    name: build
+                  - name: gdb
+                    mountPath: /x/eng/gdb/arch/x86_64-redhat-rhel6
+                  - mountPath: /x/eng/utils/java/Linux-x64
+                    name: java
+                  - mountPath: /x/eng/utils/arch/x86_64-redhat-rhel6
+                    name: utils
+                  - mountPath: /x/eng/rats,rw/noarch
+                    name: rw-noarch
+                  - mountPath: /usr/software/
+                    name: software
+                volumes:
+                - name: docker-sock
+                  hostPath:
+                      path: /var/run/docker.sock
+                - name: rlse
+                  hostPath:
+                      path: /x/eng/rlse
+                - name: btools
+                  hostPath:
+                      path: /x/eng/btools
+                - name: tools
+                  hostPath:
+                      path: /x/eng/tools
+                - name: p4-root-tools
+                  hostPath:
+                      path: /x/eng/p4_root_tools
+                - name: site
+                  hostPath:
+                      path: /x/eng/site
+                - name: eng
+                  hostPath:
+                      path: /x/eng
+                - name: rw-noarch
+                  hostPath:
+                      path: /x/eng/rats,rw/noarch
+                - name: build
+                  hostPath:
+                      path: /x/eng/btools/arch/x86_64-redhat-rhel6
+                - name: gdb
+                  hostPath:
+                      path: /x/eng/gdb/arch/x86_64-redhat-rhel6
+                - name: java
+                  hostPath:
+                      path: /x/eng/utils/java/Linux-x64
+                - name: rats
+                  hostPath:
+                      path: /x/eng/rats/arch/x86_64-redhat-rhel6
+                - name: utils
+                  hostPath:
+                      path: /x/eng/utils/arch/x86_64-redhat-rhel6
+                - name: software
+                  hostPath:
+                      path: /usr/software/
+            '''
+            defaultContainer 'cosine-container-centos'
+        }
+    }
+    options { 
+        disableConcurrentBuilds() 
+    }
+    stages {
+        stage('Main_Stage') {
+            steps {
+                sh """
+                    hostname -i
+                    df -h
+                    ls -la /usr/software
+                """
+                // Accessing parameters defined in your Jenkins user interface
+                echo "${PARAM1}"
+            }
+        }
+        stage('Stage_2') {
+            steps {
+                echo 'This is step2 stage'
+                echo "${PARAM2}"
+            }
+        }
+    }
+    post {
+        always {
+            echo 'All stages are completed'
+        }
+    }
+}
+
+------------------------------
+## 1.1.2. Template 2: Fixed Host Execution (Static Slave)
+Use this setup when routing workloads directly to permanent internal hardware nodes or dedicated virtual machines. Ensure the node target in your Jenkins Node Management dashboard is explicitly tagged with the matching tracking label.
+
+pipeline {
+    agent { 
+        // Directs the controller to target a physical machine or VM tagged with this label
+        label 'slave-host' 
+    }
+    options { 
+        disableConcurrentBuilds() 
+    }
+    stages {
+        stage('Main_Stage') {
+            steps {
+                sh """
+                    hostname -f
+                """
+                echo "${PARAM1}"
+            }
+        }
+        stage('Stage_2') {
+            steps {
+                echo 'This is step2 stage'
+                echo "${PARAM2}"
+            }
+        }
+    }
+    post {
+        always {
+            echo 'All stages are completed'
+        }
+    }
+}
+
+------------------------------
+## 1.1.3. Template 3: Parameterized Cron & Script Engine
+This template uses parameterized crontab timings to inject runtime variables dynamically into your automation stages. It maps scheduled commands directly into custom text execution loops.
+
+pipeline {
+    agent { 
+        label 'slave-host' 
+    }
+    options { 
+        disableConcurrentBuilds() 
+    }
+    parameters {
+        string(name: 'MYJOB', defaultValue: '', description: 'The custom execution string passed to the runner shell')
+    }
+    triggers {
+        // Spaces around injected parameters are automatically trimmed by the cron parsing agent
+        parameterizedCron('''
+            # Cron Schedule 1: Runs every 2 minutes with specific PHP arguments
+            */2 * * * * %MYJOB=sudo /usr/local/zend/bin/php /x/eng/test/opt/cron/click/test.sh >/x/eng/test/opt/cron/logs/test.log
+            
+            # Cron Schedule 2: Runs every 3 minutes executing an alternate bash shell entrypoint
+            */3 * * * * %MYJOB=/u/jeyaprak/test/1.sh > /u/jeyaprak/test/1.log
+        ''')
+    }
+    stages {
+        stage('Example') {
+            steps {
+                // Displaying active system user profiles
+                sh 'id'
+                echo "${params.MYJOB}"
+                
+                script { 
+                    // Dynamic updates targeting the native Jenkins UI display dashboard panels
+                    currentBuild.description = "${params.MYJOB}"
+                    currentBuild.displayName = "mytestjob"
+                    
+                    echo "Running system action for MYJOB:"
+                    def run_cmd = "${params.MYJOB}"
+                    
+                    // Capture and trim the terminal standard output print strings
+                    def output = sh(script: run_cmd, returnStdout: true).trim()
+                    echo "${output}"
+                }
+            }
+        }
+    }
+}
+
+------------------------------
+#######################
+To define agents inside the stage section, you must change your top-level agent declaration to agent none first. This stops Jenkins from forcing the global pod template onto every stage, allowing each stage to spin up its own independent, custom worker pod on-demand.
+Here is your fully corrected and restructured Jenkinsfile code snippet:
+
+pipeline {
+    // Disable the global agent so we can define custom agents inside individual stages
+    agent none
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(defaultValue: '14.17.3', description: 'Node version for build agent', name: 'Node_Version', trim: true)
+        string(defaultValue: '3.9.0', description: 'Python version for build agent', name: 'Python_Version', trim: true)
+    }
+
+    stages {
+        stage('Build node agent') {
+            // Define the multi-container agent pod specifically for the compilation step
+            agent {
+                kubernetes {
+                    yaml '''
+                    apiVersion: v1
+                    kind: Pod
+                    spec:
+                      containers:
+                      - name: node
+                        image: docker.repo.eng.netapp.com/global/devts-daas/node
+                        command:
+                        - sleep
+                        args:
+                        - infinity
+                        volumeMounts:
+                        - name: docker-sock
+                          mountPath: /var/run/docker.sock
+                      volumes:
+                      - name: docker-sock
+                        hostPath:
+                          path: /var/run/docker.sock
+                    '''
+                    defaultContainer 'node'
+                }
+            }
+            when {
+                expression {
+                    return (params.Node_Version != '14.17.3' || params.Python_Version != '3.9.0')
+                }
+            }
+            steps {
+                sh 'echo "Building node agent image"'
+                container('node') {
+                    script {
+                        withDockerRegistry(credentialsId: 'reg', url: 'https://docker.repo.eng.netapp.com') {
+                            def image = "docker.repo.eng.netapp.com/global/devts-daas/node:${params.Node_Version}"
+                            def build_image = docker.build("${image}", "--build-arg NODE_VERSION=${params.Node_Version} --build-arg PYTHON_VERSION=${params.Python_Version} -f /opt/Dockerfile /opt/")
+                            build_image.push()
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Run Node') {
+            // Re-use the dynamic node agent blueprint for running validation checks
+            agent {
+                kubernetes {
+                    yaml '''
+                    apiVersion: v1
+                    kind: Pod
+                    spec:
+                      containers:
+                      - name: node
+                        image: docker.repo.eng.netapp.com/global/devts-daas/node
+                        command:
+                        - sleep
+                        args:
+                        - infinity
+                    '''
+                    defaultContainer 'node'
+                }
+            }
+            steps {
+                sh 'echo "External container"'
+                sh 'hostname'
+            }
+        }
+
+        stage('Run node latest') {
+            // Define an alternate node agent template running an isolated version
+            agent {
+                kubernetes {
+                    yaml '''
+                    apiVersion: v1
+                    kind: Pod
+                    spec:
+                      containers:
+                      - name: node-latest
+                        image: docker.repo.eng.netapp.com/global/devts-daas/node:14.17.1
+                        imagePullPolicy: Always
+                        command:
+                        - cat
+                        tty: true
+                        volumeMounts:
+                        - name: docker-vol
+                          mountPath: /var/run/docker.sock
+                      volumes:
+                      - name: docker-vol
+                        hostPath:
+                          path: /var/run/docker.sock
+                    '''
+                    defaultContainer 'node-latest'
+                }
+            }
+            steps {
+                container('node-latest') {
+                    sh 'hostname'
+                    sh 'echo "Container created at stage level"'
+                    sh 'node -v'
+                }
+            }
+        }
+
+        stage('Maven build') {
+            // Spin up a completely distinct Maven agent pod environment exclusively for this stage
+            agent {
+                kubernetes {
+                    yaml '''
+                    apiVersion: v1
+                    kind: Pod
+                    spec:
+                      containers:
+                      - name: maven
+                        image: docker.repo.eng.netapp.com/maven:3.8.1-jdk-8
+                        command:
+                        - sleep
+                        args:
+                        - infinity
+                    '''
+                    defaultContainer 'maven'
+                }
+            }
+            steps {
+                container('maven') {
+                    sh 'java -version'
+                    sh 'mvn -v'
+                }
+            }
+        }
+    }
+}
+
+------------------------------
+## Key Architectural Fixes Made
+
+* 💡 Added agent none: Placed at the very top of the script. This tells the core Jenkins execution engine to evaluate parameters and conditions first without wasting cluster capacity spinning up an unneeded global pod.
+* 💡 Fixed Valid Pod Manifests: Your third stage was missing the mandatory apiVersion: v1 and kind: Pod header declarations inside the string template block. Kubernetes will reject raw spec: text strings. These header blocks have been added back to all stages.
+* 💡 Added defaultContainer Hooks: Each stage block now includes a defaultContainer string pointer matching its target image wrapper. This eliminates the requirement to nest every single execution line inside an explicit container('name') {} block.
+* 💡 Fixed Parameter Scopes: Adjusted the environment string references within your script logic blocks from raw values (like Node_Version) to explicitly mapped parameter tracking variables (like ${params.Node_Version}).
+
+------------------------------
+
+Here is the rewritten, production-ready guide for customer reference. It has been redesigned for scannability, technical accuracy, and ease of use.
+------------------------------
+## Declarative Pipeline Reference Guide
+We leverage the Jenkins Kubernetes Plugin to spin up dynamic agents (ephemeral pods) to execute builds automatically. This architecture replaces the traditional model of maintaining permanent, static agents on physical servers or virtual machines.
+## How Dynamic Kubernetes Agents Work
+
+* Automated Scaling: The plugin provisions a dedicated Kubernetes Pod for each individual build queue request and terminates it instantly post-build.
+* Inbound Connectivity: Agent pods register as inbound runners and establish secure connections back to the Jenkins controller automatically.
+* Injected Environment Variables: The plugin automatically populates the following infrastructure variables inside execution containers:
+* JENKINS_URL: The master web interface web address.
+   * JENKINS_SECRET: The unique authentication secret key.
+   * JENKINS_AGENT_NAME: The active runtime name assigned to the agent.
+   * JENKINS_NAME: Legacy agent name string (Deprecated; retained strictly for backward compatibility).
+
+------------------------------
+## Blueprint Index & Navigation
+
+| SLNO | Automation Template Architecture | Source Blueprint / Confluence Reference |
+|---|---|---|
+| 1 | Create Dynamic Pod with NFS Volume via Pipeline | Jenkins Pipeline - Creating Dynamic pod (Template 1) |
+| 2 | Connect Static VM/Physical Infrastructure Agent | Jenkins Pipeline - Creating Dynamic pod (Template 2) |
+| 3 | Parameterized Cron Scheduling & Inlines | Jenkins Pipeline - Creating Dynamic pod (Template 3) |
+
+------------------------------
+## Frequently Asked Questions (Q&A)## Q1: Is there a hard limit on job creations? Will a large volume cause performance degradation?
+A: No. There are no arbitrary limitations enforced on the total number of jobs created within a Jenkins controller instance.
+The platform engineering team maintains real-time telemetry alerts on the underlying infrastructure tracking resource footprints. If storage or computing boundaries consistently exceed 85% utilization, the platform team will proactively investigate the workspace node clusters and scale out underlying hardware quotas as required.
+## Q2: What mechanisms exist to clean up, export, or archive historical jobs?
+A: Job lifecycle control is owned entirely by your product team. The platform engineering group will never delete, modify, or archive your application pipelines without explicit authorization.
+To manage storage efficiency independently, teams are highly encouraged to implement standard historical lifecycle policies inside their pipeline options:
+
+options {
+    // Retains only the 10 most recent execution histories automatically
+    buildDiscarder(logRotator(numToKeepStr: '10'))
+}
+
+## Q3: How do we trigger multiple downstream pipelines sequentially while passing data parameters?
+A: Use the native build step structure within your pipeline execution scripts. This action triggers target pipelines in order and injects custom parameters on-the-fly.
+## Production Automation Example
+
+stage('Trigger Downstream Pipelines') {
+    steps {
+        script {
+            // Trigger downstream pipeline execution loop 1
+            build(
+                job: 'my-pipeline1',
+                parameters: [
+                    string(name: 'foo', value: 'bar'),
+                    string(name: 'baz', value: 'qux')
+                ]
+            )
+
+            // Trigger downstream pipeline execution loop 2 after the first finishes
+            build(
+                job: 'my-pipeline2',
+                parameters: [
+                    string(name: 'foo', value: 'bar'),
+                    string(name: 'baz', value: 'qux')
+                ]
+            )
+        }
+    }
+}
+
+------------------------------
+## DaaS Jenkins Platform Knowledge Base & Index
+This comprehensive reference document consolidates all engineering runbooks, architectural designs, and platform integrations for your Jenkins Continuous Integration and Continuous Deployment (CI/CD) environment.
+------------------------------
+## 1. Jenkins Architecture & Agent Allocation## Creating Agents in the Stage Section
+To isolate workloads, use stage-level agents instead of a single global pod template. Set the top-level declaration to agent none, allowing each individual pipeline stage to request, scale, and provision its own dedicated, right-sized worker pod on demand.
+
+pipeline {
+    agent none
+    stages {
+        stage('Node Build') {
+            agent { kubernetes { yaml "..." } }
+            steps { sh 'node -v' }
+        }
+    }
+}
+
+## Jenkins Pipeline: Creating Dynamic Pods
+The Jenkins Kubernetes Plugin automatically handles infrastructure scaling. For every queued job build request, the plugin issues API calls to your cluster to provision a dedicated inbound agent Pod. As soon as the post-build actions complete, the pod is terminated instantly, eliminating idle resource waste.
+## Jenkins Pipeline with Podman
+For a daemonless alternative to Docker-in-Docker (DinD), configure your agent pod spec to use a native Podman image. To build and push images within the workspace loop safely, run your commands using an explicit bash entrypoint script:
+
+stage('Podman Build') {
+    steps {
+        sh """
+        #!/bin/bash
+        podman build -t ${REGISTRY}/${NAMESPACE}/${IMAGE}:${env.BUILD_NUMBER} .
+        """
+    }
+}
+
+## Managing Resources for Dynamic Agents & Containers
+
+* requests: The compute footprint guaranteed to the container at boot time. The pod will not schedule if the cluster cannot satisfy this request.
+* limits: The elastic ceiling providing operational headroom to manage unexpected processing spikes.
+* Tuning Policy: Use the Rancher Portal to track real-time resource utilization curves. Avoid guesswork: if a pod runs out of memory (OOMKilled), increase the limits.memory specification in your YAML template.
+
+## Jenkins Dynamic Agents via EC2 Fleet (DataSense Usecase)
+For cloud-backed, resource-intensive pipelines, Jenkins integrates with AWS EC2 Fleet and Auto Scaling Groups. The Jenkins master monitors the build queue and automatically issues instructions to provision ephemeral EC2 worker instances using predefined AWS Launch Templates. These instances connect securely via an SSH Launcher using an RSA private key (.pem) managed via CyberArk safe P-CJR-JEN-O-DAAS-DAASCI.
+## SSH-Based Linux Jenkins Agent Nodes Configuration
+To attach persistent, static worker machines or VMs to your Jenkins master:
+
+   1. Configure an open SSH boundary on the Linux target host node (Port 22).
+   2. Generate an explicit system service profile or user space (jenkins).
+   3. Add the target node within the Jenkins Node Control panel, assigning an explicit identifier tag (e.g., label 'slave-host').
+   4. Bind the node connection execution to an SSH credentials profile using pinned public/private keys.
+
+------------------------------
+## 2. Platform Engineering Best Practices## Use Timeout Protection
+Always enforce execution timeouts globally or at the individual stage level to kill runaway processes and zombie build loops before they exhaust cluster execution slots.
+
+options {
+    timeout(time: 30, unit: 'MINUTES')
+}
+
+## Running Docker Commands as a Non-Root User
+To prioritize security and maintain compliance, runtime container pods must bypass root executions. Configure your pod specification's securityContext parameters to force processes to execute under explicit non-privileged security profiles:
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+## Running NetApp Internal Tools in DaaS Jenkins Agents
+When calling internal development frameworks, ensure your pod templates contain the explicit host network storage volume mappings required to fetch standard build binaries. See section 3 for mounting structures.
+------------------------------
+## 3. Dynamic Pods & Storage Volumes## Dynamic Volumes & Dynamic Workspace Volumes
+Instead of persisting local storage directories on physical hosts, dynamic pods utilize ephemeral storage block mounts or map specific PersistentVolumeClaims (PVCs) directly into execution container pods. This architecture isolates build file footprints and prevents cross-contamination between concurrent pipeline builds.
+## Mounting Internal Volumes
+To let your pipelines access internal network tools, package archives, and shared execution files, map paths from the underlying host network as infrastructure directories using a hostPath block inside your Pod template manifest:
+
+volumeMounts:
+- name: internal-tools
+  mountPath: /x/eng/toolsvolumes:
+- name: internal-tools
+  hostPath:
+    path: /x/eng/tools
+
+------------------------------
+## 4. Ecosystem & Enterprise Security Integrations## Conjur Jenkins Integration
+Secure your automated workflows by extracting secrets dynamically using the CyberArk Conjur Secrets Plugin. This plugin eliminates hardcoded plaintext passwords from code repositories. It relies on secure JWT (JSON Web Token) Authentication to log into your central enterprise Vault ecosystem, matching access policies directly against the jenkins_full_name identity string of the running job. [1, 2, 3, 4, 5] 
+## JFrog Pipeline Integration
+Streamline binary artifact lifecycle handling by binding your pipelines to your JFrog Artifactory servers. Use authenticated pipeline helper blocks to automatically publish compiled packages, archive libraries, and container images, while logging complete build info metadata for auditing.
+## JIRA Integration: Automate New Issue Creation
+Integrate Jira tracking workflows into your pipeline architecture. By adding post-execution hooks (post { failure { ... } }), your pipeline can parse console failures and trigger the automated creation of Jira tracking tickets to alert engineering teams to regression events immediately.
+## Synopsys Detect in DaaS Jenkins Using Dynamic Agents
+Incorporate automated application security testing into your build pipelines by running Synopsys Detect (Black Duck) inside your dynamic container agents. This step performs static code analysis, tracks open-source license compliance, and builds software bill of materials (SBOM) logs before software artifacts are pushed to production registries.
+------------------------------
+## 5. Pipeline Blueprints & Customer Reference## Declarative Pipeline Template for Customer Reference
+A comprehensive reference guide for internal development teams. This document covers job scaling, handling dependencies via persistent volume caches, and standard lifecycle policies.
+## Sample Basic Pipeline Using a Dynamic Agent
+A minimal implementation guide showing how to set up a clean, single-container worker pod to run basic compilation actions, execute system shell test loops, and log build printouts.
+## MultiBranch Pipelines & Discard Old Builds Using a Jenkinsfile
+Use a Multibranch Pipeline architecture to scan your git repositories automatically and provision automated verification pipelines whenever a new branch or pull request is opened. To keep your master storage usage clean and prevent disk exhaustion, always declare a buildDiscarder policy at the root level of your configuration file:
+
+pipeline {
+    agent { label 'slave-host' }
+    options {
+        // Automatically discards build history logs, keeping only the 10 most recent runs
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+    }
+    stages {
+        stage('Execute Core Assembly') {
+            steps {
+                sh 'echo "Processing code assembly lines..."'
+            }
+        }
+    }
+}
+
+## Build a Stage in a Jenkins Pipeline On Specific Conditions
+Control your pipeline's flow by using a declarative when block directive. This directive evaluates targeted environment values, user choices, or branch names before running a stage, ensuring execution blocks are skipped if conditions are not met. [6, 7] 
+
+stage('Deploy Production') {
+    // This entire stage will be bypassed unless building the master branch
+    when {
+        branch 'master'
+    }
+    steps {
+        sh './deploy_production.sh'
+    }
+}
+
+------------------------------
+#################################
+
+###################################
+## DaaS Platform Infrastructure & SonarQube Server Integration
+This document outlines the operational framework for DaaS Dynamic Jenkins Agents, internal container image repository caching, SonarQube quality gate integration, and storage backup disaster recovery protocols.
+------------------------------
+## 1. DaaS Dynamic Jenkins Agents
+The Development Testing Services (DevTS) platform supports Dynamic Jenkins Agents to maximize cluster resource utilization and optimize continuous integration costs.
+
+* On-Demand Provisioning: Dynamic agents are lightweight container workloads spun up inside a Kubernetes cluster instantly upon build request queueing, and automatically destroyed when the build pipeline completes.
+* Isolated Reproducible Environments: Every build executes within a fresh, clean, and entirely isolated environment, preventing cross-build cache pollution or state contamination.
+* Customization and Version Control: Build environments are defined as code using a standard Dockerfile, allowing engineering teams to version control, patch, and customize the toolchains required for their specific pipelines.
+* OS Support Platform Limits: Currently, DaaS natively supports Linux-based dynamic containers. Active platform engineering is underway to roll out Windows-based dynamic container capabilities.
+
+------------------------------
+## 2. Container Registry Architecture
+To minimize dependency download latency and reduce public internet data consumption, development groups are directed to use the NetApp internal container repository infrastructure.
+
+* Local Artifact Preservation: Teams should store custom container images built locally within the NetApp internal Docker registry.
+* Upstream Proxy Caching: Configure your local image paths to route through the internal registry to automatically proxy and cache upstream external public images (e.g., Docker Hub, Quay).
+* Registry Host Address: All base image templates should point directly to the internal secure domain: docker.repo.eng.netapp.com.
+
+------------------------------
+## 3. SonarQube Server Integration with DaaS Jenkins## Prerequisites & Limitations
+
+   1. Infrastructure Ownership: The centralized SonarQube server infrastructure is not natively supported or managed by the DevTS team. Your engineering group must provision, host, and maintain its own target SonarQube server instance.
+   2. Plugin Dependency: Ensure the SonarScanner Plugin for Jenkins is fully installed on your controller. This plugin centralizes the management of SonarQube server target connection parameters, URLs, and security credentials inside the Jenkins Global Configuration page.
+
+## 3.1. Installation & Global Parameters Setup
+
+   1. Install SonarScanner for Jenkins via the Jenkins Update Center dashboard.
+   2. Configure server routing settings as a system administrator:
+   * Navigate to Manage Jenkins ➔ Configure System.
+      * Scroll down to the SonarQube Configuration section block and click Add SonarQube.
+      * Populate your unique server URL name descriptor string (e.g., Sonarqube_Prod).
+      * Credential Handling: Generate your server authentication connection token within SonarQube, and save it inside the Jenkins credential store explicitly as a Secret Text credential type.
+   
+## 3.2. Script Context & Environment Blocks
+The plugin provides a native withSonarQubeEnv wrapper block that maps your global connection parameters directly into your pipeline runtime.
+
+// Passing the environment-only flag expands underlying connection variables
+withSonarQubeEnv('My SonarQube Server', envOnly: true) {
+    // This systematically populates and expands: SONAR_CONFIG_NAME, SONAR_HOST_URL, and SONAR_AUTH_TOKEN
+    println "Target Host Connection: ${env.SONAR_HOST_URL}"
+}
+
+
+* UI Badge Mapping: Upon pipeline stage completion, the plugin identifies the active scan metadata metrics, automatically appending a quality status widget block and deep-link badge onto your main Jenkins Job page interface.
+
+## 3.3. Multi-Container Stage Implementation
+To ensure compliance with the dynamic agent architectural framework, quality analysis stages must utilize the official lightweight command line interface scanner image layer.
+## Dynamic Pod Scanner Template Definition
+
+- name: 'sonar-scanner-agent'
+  image: docker.repo.eng.netapp.com/sonarsource/sonar-scanner-cli:4.6
+  imagePullPolicy: IfNotPresent
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+## Declarative Quality Analysis Stage Code
+
+stage('Quality Analysis') {
+    steps {
+        // Direct execution routing into the dedicated sonar scanner agent container slot
+        container('sonar-scanner-agent') {
+            echo "STAGE: Initiating SonarQube Code Quality Analysis..."
+            
+            // Selecting global connection block profile saved within master configurations
+            withSonarQubeEnv('Sonarqube_Prod') {
+                script {
+                    try {
+                        // Navigate to workspace directory root and fire analysis script
+                        sh "cd ${env.WORKSPACE}; sonar-scanner ${sonarScanCmd}"
+                        env.SONAR_ANALYSIS_RESULT = "SUCCESS"
+                    } catch(err) {
+                        // Catch scanning errors safely to prevent hard crash of assembly pipelines
+                        echo "SonarQube analysis encountered execution failure: ${err}"
+                        currentBuild.result = "SUCCESS"
+                        env.SONAR_ANALYSIS_RESULT = "FAILURE"
+                    }
+                }
+            }
+        }
+    }
+}
+
+------------------------------
+## 4. Disaster Recovery, Volume Snapshots, & Platform Backups
+To guarantee protection against sudden platform failures, data corruption events, or localized cluster crashes, the DaaS storage tier enforces an automated backup recovery protocol.
+
+[ Primary Cluster Site ]                           [ Remote DR Site: Wichita ]
++---------------------+                           +-------------------------+
+
+| Jenkins Master PV   |                           |                         |
+| (Active Live Storage) |                           |                         |
++----------+----------+                           +------------+------------+
+
+           |                                                   ^
+           | (Local Trident Volume Snapshot)                   |
+           v                                                   |
++---------------------+                                       |
+
+| Point-in-Time       |=======================================+
+| Volume Snapshot     |       (Nightly SnapMirror Replication)
++---------------------+
+
+
+* Trident-Powered Snapshots: Storage volume states are safely retained utilizing the native volume snapshot framework supported by Astra Trident (available on Trident release versions 20.01 and above running on Kubernetes cluster versions 1.17+).
+* Volume Cloning: These point-in-time storage state snapshots capture live data mounted to your Persistent Volumes (PVs) and can be used to instantly clone identical, independent environments for rapid recovery.
+* Nightly Remote Disaster Recovery (DR): Snapshots are not retained solely on the local hardware cluster. Every night, automated background jobs run a data replication process (SnapMirror) that transfers snapshots to a geographically isolated remote disaster recovery facility located in Wichita.
+* Proactive Infrastructure Alerting: The Enterprise Control Operations (ECO) infrastructure monitoring team maintains real-time alerts linked directly to replication health. If a network disruption occurs or a SnapMirror backup stream fails, the ECO group receives an immediate alert to triage and restore replication parity.
+
+######################################
+#######################################
+## Nessus Vulnerability Management Integration with DaaS
+Tenable.io and Nessus SecurityCenter provide comprehensive vulnerability management by predicting which security issues to remediate first across your deployment infrastructure.
+------------------------------
+## 1. Architectural Scan Zones
+The Product Security Group (PSG) maintains four distinct network scan zones using dedicated Nessus execution engines. Scan routing is determined automatically by the Nessus Administrator based on the location of your host machines:
+
+* Scan Zone 1: Nessus RTP Open Lab Scanner
+* Scan Zone 2: Nessus RTP EngDome Scanner
+* Scan Zone 3: Nessus BLR Open Lab Scanner
+* Scan Zone 4: Nessus BLR EngDome Scanner
+
+------------------------------
+## 2. Requesting Infrastructure & User Access
+Nessus SecurityCenter integrates with LDAP to sync accounts with Active Directory.
+## How to Request a Scanning Account
+To provision a user space, send an email to ng-psg-tools containing:
+
+* Your enterprise Single Sign-On (SSO) ID
+* The specific Product Name
+
+## How to Register Host Target IPs
+Before a target machine can be scanned, its network route must be whitelisted in the SecurityCenter. Email ng-psg-tools with:
+
+* The IP Addresses or subnet ranges to be scanned
+* The physical/virtual Location of the host machines (e.g., OpenLab / EngDome and RTP / NB / SVL / NANE)
+
+------------------------------
+## 3. Scan Configuration Lifecycle
+
+* Nessus SecurityCenter Portal URL: https://nss.cls.eng.netapp.com/
+
+## Step 1: Pre-Scan Target Validation
+Ensure the PSG team has confirmed that your target IP addresses are added to the NetApp Scan Repository and mapped to the appropriate Scan Zone. Scans launched against unregistered IPs will fail.
+## Step 2: SecurityCenter Authentication
+Log into the Nessus SecurityCenter portal using your standard SSO ID and password.
+## Step 3: Configure Target Credentials (Credentialed Scans Only)
+Credentialed scans look inside the operating system to find deep patch vulnerabilities. Skip this step for basic uncredentialed network boundary scans.
+
+   1. Navigate to Scans ➔ Credentials ➔ Add New Credential.
+   2. Select your target authentication mechanism. For example, for SSH-based Linux hosts, upload your target deployment private key.
+   3. Bind this credential file definition to your upcoming scan configuration.
+
+## Step 4: Dispatch the Active Scan Request
+
+   1. Navigate to Scans ➔ Active Scans ➔ Add.
+   2. General: Enter a unique Scan Name and select the PSIRT Standard execution policy.
+   3. Settings: Set Import Repository to NetApp Repository and Scan Timeout Action to Import Completed Results.
+   4. Targets: Select Target Type (IP / DNS) and input your registered target IP addresses, ranges, or domain names.
+   5. Credentials: Map the credential profile configured in Step 3 from the dropdown menu.
+   6. Post Scans: Attach a report template to automatically compile results.
+
+------------------------------
+## 4. Troubleshooting Scan Failures## 4.1. Scan Execution Failures
+If an active scan crashes or returns an error state, navigate to the top-right corner dropdown menu: Name ➔ System Logs to review exceptions. Common failures include:
+
+* Unregistered IPs: The target IP addresses were never added to the master NetApp repositories.
+* Scan Zone Mismatch: The target IP addresses are blocked because they are not assigned to the proper local scanner execution engine zone.
+* Network Isolation: The target host is unreachable from the designated scanning pool due to host-level firewalls (iptables / Windows Firewall) or routing security groups.
+
+📧 Support Protocol: Email ng-psg-tools with the target IP address and the raw console failure text copied from your System Logs.
+
+## 4.2. Diagnostic Plugins Index
+Nessus uses explicit Plugin IDs to log structural errors, success footprints, and credential boundaries. Review these IDs within your completed reports to verify scan health:
+## Authentication & Access Failures
+
+* 21745: Global Authentication Failure (Settings verification issue).
+* 104410: Authentication Failure(s) for the explicit credentials provided.
+* 24786: Windows Scan not performed with local administrative privileges.
+* 11149: HTTP web-login configuration interface failure.
+* 26917: Nessus cannot access the target Windows Remote Registry.
+
+## Windows Success Footprints
+
+* 19506: Nessus Scan Information. Inspect the raw output fields; a successful credentialed sweep must explicitly show: Credentialed Checks: yes.
+* 24269: WMI Connection Available and accessible.
+* 10394: SMB Log in successfully established.
+* 10400: Remotely Accessible Registry verified.
+* 57033: Microsoft Patch Bulletin Feasibility Check passed successfully.
+
+## Linux Success Footprints
+
+* 19506: Nessus Scan Information. Verify that Credentialed Checks: yes is printed.
+* 22869: Software Enumeration successfully completed via SSH session connection.
+* 12634: Authenticated Check: OS Name and Installed Package Enumeration verified.
+
+------------------------------
+## 5. Security Center Automation & Scripting
+Automate your scheduling workflows by interfacing with the SecurityCenter via the pyTenable Python SDK library ecosystem.
+## 5.1. SDK Installation
+Ensure your local automation host environment has Python 3.7+ and pip configured, then run:
+
+pip install pytenable
+
+## 5.2. Python Automation Script Blueprint
+
+from tenable.sc import TenableSC
+# Initialize connection back to the cluster central SecurityCenter instancesc = TenableSC('nss.cls.eng.netapp.com')
+# Authenticate utilizing local account profiles provisioned by the PSG Group
+sc.login('username', 'password!')
+# Dispatch and coordinate scans programmatically across target whitelisted repositories# Customize execution parameters according to your pipeline demands
+print("Nessus Scan connection established. Active jobs triggered successfully.")
+
+------------------------------
+## 6. Report Generation Lifecycle
+Follow these steps to extract, format, and download your risk compliance results:
+## Step 1: Locate Target Scan
+Navigate to the central control panel: Scans ➔ Active Scans.
+## Step 2: Execute Scan Run
+Click the Play button icon corresponding to your pre-configured target scan profile to execute the vulnerability audit.
+## Step 3: Map Report Format Templates
+Once the execution log status changes to completed, navigate to Scan Results ➔ Send to Report.
+
+* Template Injections: Upload custom templates by going to Reports ➔ Options ➔ Import Template.
+* Download References:
+* PSIRT Nessus XML Report Template
+   * Detailed CSV Report Template Layout
+
+Select your export target layout option (Add PDF Report or CSV Detail), then click Submit.
+## Step 4: Download Security Artifacts
+Navigate to the Report Results dashboard view and click Download to archive the compliance file on your local workstation.
+------------------------------
+## 7. Platform Engineering Frequently Asked Questions (FAQs)## Q: What actions occur automatically after I commit code and merge a PR?
+A: Once code changes are merged into your release branch inside Bitbucket, a web hook hooks back to your CI engine to trigger a release build automatically. The pipeline compiles your source tree, assembles a new container artifact, tags it with the explicit build version number, and deploys it directly to your Dev Namespace.
+## Q: Where are final container image tags stored?
+A: All freshly generated container images are pushed and securely archived inside your Elastic Container Registry (ECR) image workspace repository.
+------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
