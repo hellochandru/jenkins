@@ -1,0 +1,39 @@
+Platform Monitoring and Alerting
+
+A number of different monitoring systems work together to provide us platform monitoring services.
+Kubernetes based Monitoring
+In our Kubernetes-based microservices architecture, we employ a robust monitoring strategy to ensure the high availability and reliability of our services without directly integrating each microservice with PagerDuty. This approach is both efficient and scalable, addressing the complexities of managing individual service integrations from a development and operational standpoint.
+Centralized Platform-Based Monitoring
+To avoid the complications of individual service integration with PagerDuty, we utilize a platform-based monitoring solution. This centralized approach works as follows:
+1. Health Check Endpoints: Each microservice exposes an HTTP /health endpoint. This endpoint is crucial for assessing the service's health and is used by the Kubernetes platform for readiness and liveness checks. A service's pod is considered ready to handle workloads only if it passes these health checks.
+2. Kubernetes API Polling: Our monitoring system is configured to periodically poll the Kubernetes API to gather metrics about the pods. This data collection is essential for evaluating the state of our services and ensuring they are functioning correctly.
+3. Alarm Rules and Alerts: The monitoring system applies a set of predefined alarm rules to the collected metrics to detect anomalies or issues. For instance, the KubePodNotReady alarm triggers if a pod remains in a non-ready state for more than 15 minutes. The alarm rules are structured to identify various conditions that could indicate potential problems with our services.
+ Here is an example of an alarm rule for detecting non-ready pods:
+
+4. Alertmanager Integration: When an alarm is triggered, it is sent to Alertmanager, which is responsible for determining the appropriate notification action. Depending on the severity and the defined policies, Alertmanager can escalate the issue by creating an incident in PagerDuty or by using other notification channels as configured.
+By employing this monitoring strategy, we ensure that our microservices are under constant surveillance without the need for each service to manage its own PagerDuty integration. This setup allows for prompt detection and response to incidents, maintaining the reliability and performance of our applications in the Kubernetes environment.
+-------------------------------------
+- alert: KubePodNotReady
+  expr: |
+    sum by (namespace, pod, cluster) (
+      max by(namespace, pod, cluster) (
+        kube_pod_status_phase{job="kube-state-metrics", namespace=".*", phase="Pending|Unknown"}
+      ) 
+      * on(namespace, pod, cluster) group_left(owner_kind) 
+      topk by(namespace, pod, cluster) (
+        1, max by(namespace, pod, owner_kind, cluster) (kube_pod_owner{owner_kind!="Job"})
+      )
+    ) > 0
+  for: 15m
+  labels:
+    severity: warning
+  annotations:
+    summary: 'Pod has been in a non-ready state for more than 15 minutes.'
+    description: 'Pod {{ $labels.namespace }}/{{ $labels.pod }} has been in a non-ready state for longer than 15 minutes.'
+    runbook_url: 'https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubepodnotready'
+--------------------------------------------
+What this Alert Does (Plain English)This alert checks if an application pod gets stuck while trying to start up. If a pod stays in a Pending (waiting for a server) or Unknown (system cannot talk to the pod) state for longer than 15 minutes, it triggers a 🟠 Warning alert.It automatically ignores temporary background worker tasks (called Jobs) because those are meant to run and turn off quickly.
+
+Breaking Down the Code (How it Works)phase="Pending|Unknown": This looks for any pod that cannot fully start or is lost by the system.owner_kind!="Job": This ensures that temporary batch jobs (like a quick database backup script) do not trigger false alarms.for: 15m: The pod must be broken for 15 straight minutes before your phone will ring. This stops alerts for normal, quick app restarts.runbook_url: A web link included in the alert that your engineers can click to read troubleshooting steps
+
+Example Scenario: Why this Alert TriggersThe Mistake: An engineer deploys a new service but makes a spelling mistake in the container name.The Problem: Kubernetes tries to pull the container image, but it fails. The pod gets stuck in a Pending loop.The Alarm: After 15 minutes pass, Prometheus notices the pod is still stuck, packages the error, and fires an alert to PagerDuty to notify the on-call engineer.
