@@ -1,0 +1,417 @@
+## DaaS App-Sec Governance & DevSecOps Platform Manual
+DevSecOps-as-a-Service (DaaS) eliminates the operational overhead of managing local software build setups, infrastructure hosting, tool updates, and telemetry tracing. This centralized NetApp framework allows product groups to dispatch compliant deployments rapidly while embedding deep security gates at every execution phase.
+------------------------------
+## 1. Supported Platform Ecosystem Integrations
+DaaS abstracts security configurations using official plug-ins, custom dynamic agents, and centralized credential mappings across the following tools:
+
+* Source Code Management (SCM): Perforce (BigTop Cluster), Bitbucket (BigTop & OpenLab), and GitHub (OpenLab).
+* Artifact Operations: SonarQube, JFrog Artifactory registries (Docker & Helm), and Tenable Nessus networks.
+* Security & Vulnerability Analysis: Coverity SAST and Synopsys Detect / Black Duck SCA.
+
+------------------------------
+## 2. Synopsys Detect (Black Duck) SCA Integration
+The Synopsys Detect for Jenkins Plugin comes pre-installed across the DaaS cluster to run compositional analysis scans, build dependency Bill of Materials (BOM) inventories, flag license violations, and identify open-source security vulnerabilities.
+## 2.1. Server Deployment Tiers
+
+* Production Deployment Instance: https://blackduck.eng.netapp.com
+* Staging Verification Instance: https://blackduck-staging.eng.netapp.com
+* Account Creation Workflow: Open an engineering request ticket with enghelp+blackduck@netapp.com to generate your targeted project workspace.
+
+## 2.2. Black Duck User Role Mapping Matrix
+
+| Assigned User Role | Operational Action Scope |
+|---|---|
+| Project Creator | Generates parent Black Duck projects. |
+| Project Code Scanner | Populates the local project Bill of Materials (BOM). |
+| Global Code Scanner | Populates the project BOM, awaits parsing metrics, compiles vulnerability compliance reports, and checks for explicit corporate policy violations. |
+| Project Manager | Extracts and downloads compliance report data packages. |
+
+## 2.3. Plugin Configuration Lifecycle
+Configure your master plugin connection via Manage Jenkins ➔ Configure System ➔ Synopsys Detect:
+
+   1. Global Download Strategy: Choose Install AirGapped Detect as a Tool Installation (SecLab) for highly secure execution profiles, or Download via scripts / use DETECT_JAR (Open EngLab) for open network zones.
+   2. Black Duck URL: Input your designated server endpoint instance.
+   3. Black Duck Credentials: Click Add ➔ Jenkins.
+   * For API Tokens: Change the Kind dropdown to Secret text and paste your secure Black Duck access token within the Secret text area.
+      * For Basic Authentication: Select Username with password.
+   4. Advanced Settings: Adjust the Connection Timeout boundary if necessary (defaults to 120 seconds). Select Trust Black Duck certificates to allow Secure Socket Layer (SSL) verification handshakes.
+   5. Click Test Connection to Black Duck to verify configuration alignment, then click Save.
+
+## 2.4. Pipeline Workflow Generation
+To append compositional scanning steps into your Jenkinsfile workflow scripts, utilize the embedded Pipeline Syntax helper utility:
+
+   1. Click the Pipeline Syntax navigation link on any active Jenkins pipeline item view.
+   2. Under the Sample Step dropdown selector block, choose synopsys_detect: Synopsys Detect.
+   3. Append your targeted evaluation properties inside the arguments block window.
+   4. (Optional) Select Return status code or enforce a Custom download strategy toggle box.
+   5. Click Generate Pipeline Script and paste the resulting statement loop directly into your declarative script block.
+
+------------------------------
+## 3. Coverity Static Application Security Testing (SAST) Integration## 3.1. Onboarding Path
+
+   1. Submit your project parameters using the central onboarding submission sheet: http://code-quality.netapp.com/request_product.php
+   2. Ensure the AppSec engineering team provisions a dedicated code stream for your product architecture within the appropriate target environment tier.
+
+## 3.2. Environmental Configuration Profiles## Staging Environment Variables (Dev / Test)
+
+environment {
+    WORKSPACE           = "${env.WORKSPACE}"
+    COVERITY_HOSTNAME   = "https://coverity-dev2.cls.eng.netapp.com"
+    COVERITY_PORT       = 9090
+    COVERITY_STREAM     = "<Insert_Onboarding_Stream_Name_Here>"
+    ANALYSIS_TOOLS_BIN  = "/opt/coverity-analysis/bin"
+    INTERMEDIATE_DIR    = "$WORKSPACE/CoverityIDIR"
+    CONFIG_FILE         = "$WORKSPACE/coverityconfig/coverity_config.xml"
+    AUTH_KEY            = "tools/coverity_auth-key.txt"
+    CERT_FILE           = "tools/coverity_CA_cert.pem"
+}
+
+## Production Environment Variables (Live)
+
+environment {
+    WORKSPACE           = "${env.WORKSPACE}"
+    COVERITY_HOSTNAME   = "https://coverity.cls.eng.netapp.com"
+    COVERITY_PORT       = 9090
+    COVERITY_STREAM     = "<Insert_Onboarding_Stream_Name_Here>"
+    ANALYSIS_TOOLS_BIN  = "/opt/coverity-analysis/bin"
+    INTERMEDIATE_DIR    = "$WORKSPACE/CoverityIDIR"
+    CONFIG_FILE         = "$WORKSPACE/coverityconfig/coverity_config.xml"
+    AUTH_KEY            = "tools/coverity_auth-key.txt"
+    CERT_FILE           = "tools/coverity_CA_cert.pem"
+}
+
+------------------------------
+## 4. Production DevSecOps Pipeline Blueprint
+This complete Declarative pipeline script configures multi-container agent pods running Coverity static analysis scanners alongside native Docker tools. It is pre-configured to execute repository change checking polls automatically.
+
+pipeline {
+    agent {
+        kubernetes {
+            defaultContainer 'docker'
+            yaml """
+            apiVersion: v1
+            kind: Pod
+            spec:
+              containers:
+              - name: coverity-scan
+                image: docker.repo.eng.netapp.com/global/devts-daas/coverity/coverity_scan:2021.12.1
+                imagePullPolicy: Always
+                command:
+                - cat
+                tty: true
+                resources:
+                  requests:
+                    memory: "512Mi"
+                    cpu: "300m"
+                  limits:
+                    memory: "5Gi"
+                    cpu: "500m"
+              - name: docker
+                image: docker.repo.eng.netapp.com/global/devts-daas/daas_netapp/docker
+                command:
+                - cat
+                tty: true
+                resources:
+                  requests:
+                    memory: "512Mi"
+                    cpu: "300m"
+                  limits:
+                    memory: "1Gi"
+                    cpu: "500m"
+                volumeMounts:
+                - mountPath: /var/run/docker.sock
+                  name: test-volume
+              volumes:
+              - name: test-volume
+                hostPath:
+                  path: /var/run/docker.sock
+            """
+        }
+    }
+    
+    triggers {
+        // Enforce systematic, short polling sweeps to detect Git repository changes
+        pollSCM('* * * * *')
+    }
+    
+    options {
+        disableConcurrentBuilds()
+    }
+    
+    environment {
+        WORKSPACE           = "${env.WORKSPACE}"
+        COVERITY_HOSTNAME   = "https://coverity.cls.eng.netapp.com"
+        COVERITY_PORT       = 9090
+        COVERITY_STREAM     = 'DaaS'
+        ANALYSIS_TOOLS_BIN  = "/opt/coverity-analysis/bin"
+        INTERMEDIATE_DIR    = "$WORKSPACE/CoverityIDIR"
+        CONFIG_FILE         = "$WORKSPACE/coverityconfig/coverity_config.xml"
+        AUTH_KEY            = "tools/coverity_auth-key.txt"
+        CERT_FILE           = "tools/coverity_CA_cert.pem"
+    }
+    
+    stages {
+        stage('Static Application Security Testing') {
+            steps {
+                container('coverity-scan') {
+                    echo "Executing Coverity SAST analysis stream: ${env.COVERITY_STREAM}"
+                    // Insert local build compilation and coverity analysis command steps below
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo "DevSecOps build sequence completed. Tearing down ephemeral pod resources."
+        }
+    }
+}
+
+⚠️ Infrastructure Advisory: If your pipeline execution layers encounter errors, or if you require modifications to the underlying Coverity base container engine image, contact the platform engineering group directly at ng-daas-dev.
+
+-
+###########################
+## Platform Architecture Overview
+The Development-Testing-Services-as-a-Service (DaaS) solution provides a centralized, enterprise-grade ecosystem designed to orchestrate the entire software delivery lifecycle. Built natively on Kubernetes, DaaS unifies automation, source control, artifact tracking, and observability infrastructure into a single, cloud-like experience.
+
+                  +-----------------------------------+
+
+                  |      ArgoCD Manifest Engine       |
+                  +-----------------+-----------------+
+
+                                    |
+                                    v
+                  +-----------------+-----------------+
+                  |      Kubernetes Cluster Tier      |
+                  |     (Managed via Spectro Cloud)   |
+                  +--------+-----------------+--------+
+
+                           |                 |
+            +--------------+                 +--------------+
+            v                                               v
++-----------------------+                       +-----------------------+
+
+|  Containerized App    |                       |    Astra Trident      |
+|  Jenkins Master &     |                       |  Storage Orchestrator |
+|  Dynamic Pod Agents   |                       +-----------+-----------+
++-----------------------+                                   |
+                                                            v
+                                                +-----------+-----------+
+
+                                                | Backend Storage Agnostic|
+                                                | ONTAP / CVS / iSCSI   |
+                                                +-----------------------+
+
+------------------------------
+## 🏗️ Core Infrastructure & Deployment Framework
+
+* Orchestration Matrix: The platform utilizes Docker Engine to build toolchains and Helm to package and deploy complex microservice manifests.
+* GitOps Continuous Delivery: Continuous deployment and tracking of live infrastructure declarations are managed via ArgoCD to ensure state synchronization across target clusters.
+* Cluster Layering: On-premise enterprise Kubernetes and storage orchestration environments are managed using Spectro Cloud clusters provisioned by the CaaS Team.
+* Regional Availability: The centralized solution is deployed on-premise across isolated testing zones inside OpenLab and BigTop.
+
+------------------------------
+## 💾 Storage Agnostic Orchestration via NetApp Trident
+DaaS relies on Astra Trident (NetApp Storage Orchestrator) to manage persistent data storage layers. This layout decouples applications from the underlying physical infrastructure, allowing seamless mounting across diverse protocols (NFS, iSCSI) and storage platforms:
+
+* NetApp ONTAP® data management software.
+* NetApp Element® scale-out software architectures.
+* Cloud Volumes Service (CVS) public endpoints.
+* Cloud Volumes ONTAP (CVO) virtualized cloud storage nodes.
+
+------------------------------
+## 📈 Platform Features & Business Value## High Availability & Dynamic Scalability
+
+* ⚡ Automated Infrastructure: The core value proposition of DaaS centers on the automated, zero-touch deployment of production-ready Jenkins master controllers.
+* ⚡ Load Balancing & Scalability: Pipelines run within fully load-balanced environments with on-demand horizontal scale-out capabilities across both on-premise and public cloud clusters.
+* ⚡ Kubernetes Plugin Integration: Features native integration with the Jenkins Kubernetes Plugin to handle automated container scaling, spinning up lightweight inbound agents for individual builds and destroying them post-execution.
+
+## Governance, Customization, & Pipeline Reuse
+
+* ⚙️ Tailored Base Footprints: Engineering groups can customize their standard Jenkins base agent images to inject specific binary dependencies, ensuring consistent and reproducible execution environments.
+* ⚙️ Embedded Security Standards: Jenkins master instances come pre-installed with the required enterprise plug-ins to enforce governance and compliance across maturity stages.
+* ⚙️ Code Reuse: Leverages the Jenkins Templating Engine (JTE) alongside shared corporate libraries to maximize code reusability and eliminate duplicate logic across separate product repositories.
+
+## Built-in Observability & Infrastructure Telemetry
+DaaS is tightly integrated with a unified cloud and on-premise monitoring framework to monitor system limits, predict performance bottlenecks, and track pipeline logs:
+
+* Data Infrastructure Insights: For deep multi-tenant infrastructure visibility.
+* Falcon LogScale: For centralized real-time logging.
+* Prometheus & Grafana: For metrics collection and visual dashboard management.
+
+------------------------------
+## DaaS App-Sec Governance & DevSecOps Platform Manual
+DevSecOps-as-a-Service (DaaS) removes the operational headache of setting up CI/CD tools, provisioning infrastructure, handling backups, and keeping up with monitoring. This centralized NetApp team provides mature, ready-to-use DevSecOps pipelines. Instead of taking months to integrate security tools like Coverity and Black Duck yourself, DaaS provides these out of the box.
+------------------------------
+## 1. Supported Platform Integrations
+DaaS provides pre-configured integrations with standard development and security tools:
+
+* Source Code Management (SCM): Perforce (BigTop), Bitbucket (BigTop & OpenLab), and GitHub (OpenLab).
+* Security & Vulnerability Scanners: Coverity (Static Analysis), Black Duck (Compositional/License Scan), SonarQube, and Tenable Nessus.
+* Artifact Registries: JFrog Artifactory (Docker and Helm registries).
+
+------------------------------
+## 2. Synopsys Detect (Black Duck) Integration
+DaaS comes pre-installed with the Synopsys Detect Plugin. It scans your project's code base to identify open-source components, manage licenses, and discover security vulnerabilities.
+## 2.1. Available Network Instances
+
+* Production Instance: https://blackduck.eng.netapp.com
+* Staging Instance: https://blackduck-staging.eng.netapp.com
+* Project & User Creation Contact: Open a help ticket via enghelp+blackduck@netapp.com.
+
+## 2.2. Required Black Duck User Roles
+To run a scan, your Black Duck account API token must have these access roles:
+
+| Role | Action Scope |
+|---|---|
+| Project Creator | Creates new Black Duck projects. |
+| Project Code Scanner | Populates the project Bill of Materials (BOM). |
+| Global Code Scanner | Populates the project BOM, checks for policy violations, and generates reports. |
+| Project Manager | Downloads and manages project reports. |
+
+## 2.3. Configuring the Plugin in Jenkins
+Configure your plugin connections by navigating to Manage Jenkins ➔ Configure System ➔ Synopsys Detect:
+
+   1. Global Download Strategy: Select Install AirGapped Detect as a Tool Installation (SecLab) or Download via scripts or use DETECT_JAR (Open EngLab).
+   2. Black Duck URL: Enter your target server address (Staging or Production).
+   3. Black Duck Credentials: Click Add ➔ Jenkins.
+   * For API Tokens, change the Kind field to Secret text and paste your token into the Secret box.
+      * For standard setups, use Username with password. Note: SAML is not supported.
+   4. Advanced Settings: You can specify custom values for connection timeouts (defaults to 120 seconds) and check Trust Black Duck certificates to allow SSL handshakes.
+   5. Click Test Connection to Black Duck to confirm a Connection successful! status displays, then click Save.
+
+## 2.4. Generating Pipeline Syntax
+
+   1. Go to the Pipeline Syntax helper page in your Jenkins pipeline job.
+   2. Select synopsys_detect: Synopsys Detect from the Sample Step dropdown menu.
+   3. Add your custom Detect configuration properties.
+   4. Check Return status code or configure a Custom download strategy if needed.
+   5. Click Generate Pipeline Script to get the exact code snippet for your Jenkinsfile.
+
+------------------------------
+## 3. Coverity Static Analysis Integration## 3.1. Onboarding Process
+
+   1. Complete the onboarding web form to request a new project stream: http://code-quality.netapp.com/request_product.php
+   2. Ensure the security team sets up your unique project stream in either the Production or Development environment.
+
+## 3.2. Environment Variable Profiles
+Add the appropriate environment block to your Jenkinsfile depending on your target tier:
+## Staging Configuration Profile
+
+environment {
+    WORKSPACE           = "${env.WORKSPACE}"
+    COVERITY_HOSTNAME   = "https://coverity-dev2.cls.eng.netapp.com"
+    COVERITY_PORT       = 9090
+    COVERITY_STREAM     = "<Update_StreamName_Created_In_Step1>"
+    ANALYSIS_TOOLS_BIN  = "/opt/coverity-analysis/bin"
+    INTERMEDIATE_DIR    = "$WORKSPACE/CoverityIDIR"
+    CONFIG_FILE         = "$WORKSPACE/coverityconfig/coverity_config.xml"
+    AUTH_KEY            = "tools/coverity_auth-key.txt"
+    CERT_FILE           = "tools/coverity_CA_cert.pem"
+}
+
+## Production Configuration Profile
+
+environment {
+    WORKSPACE           = "${env.WORKSPACE}"
+    COVERITY_HOSTNAME   = "https://coverity.cls.eng.netapp.com"
+    COVERITY_PORT       = 9090
+    COVERITY_STREAM     = "<Update_StreamName_Created_In_Step1>"
+    ANALYSIS_TOOLS_BIN  = "/opt/coverity-analysis/bin"
+    INTERMEDIATE_DIR    = "$WORKSPACE/CoverityIDIR"
+    CONFIG_FILE         = "$WORKSPACE/coverityconfig/coverity_config.xml"
+    AUTH_KEY            = "tools/coverity_auth-key.txt"
+    CERT_FILE           = "tools/coverity_CA_cert.pem"
+}
+
+------------------------------
+## 4. Production DevSecOps Pipeline Template
+This template creates a dynamic multi-container Kubernetes pod agent. It includes a coverity-scan container pre-loaded with scanning tools, and a standard docker tool container. It also monitors source repository changes automatically.
+
+pipeline {
+    agent {
+        kubernetes {
+            defaultContainer 'docker'
+            yaml """
+            apiVersion: v1
+            kind: Pod
+            spec:
+              containers:
+              - name: coverity-scan
+                image: docker.repo.eng.netapp.com/global/devts-daas/coverity/coverity_scan:2021.12.1
+                imagePullPolicy: Always
+                command:
+                - cat
+                tty: true
+                resources:
+                  requests:
+                    memory: "512Mi"
+                    cpu: "300m"
+                  limits:
+                    memory: "5Gi"
+                    cpu: "500m"
+              - name: docker
+                image: docker.repo.eng.netapp.com/global/devts-daas/daas_netapp/docker
+                command:
+                - cat
+                tty: true
+                resources:
+                  requests:
+                    memory: "512Mi"
+                    cpu: "300m"
+                  limits:
+                    memory: "1Gi"
+                    cpu: "500m"
+                volumeMounts:
+                - mountPath: /var/run/docker.sock
+                  name: test-volume
+              volumes:
+              - name: test-volume
+                hostPath:
+                  path: /var/run/docker.sock
+            """
+        }
+    }
+    
+    triggers {
+        // Poll SCM regularly to pick up branch code updates automatically
+        pollSCM('* * * * *')
+    }
+    
+    options {
+        disableConcurrentBuilds()
+    }
+    
+    environment {
+        WORKSPACE           = "${env.WORKSPACE}"
+        COVERITY_HOSTNAME   = "https://coverity.cls.eng.netapp.com"
+        COVERITY_PORT       = 9090
+        COVERITY_STREAM     = 'DaaS'
+        ANALYSIS_TOOLS_BIN  = "/opt/coverity-analysis/bin"
+        INTERMEDIATE_DIR    = "$WORKSPACE/CoverityIDIR"
+        CONFIG_FILE         = "$WORKSPACE/coverityconfig/coverity_config.xml"
+        AUTH_KEY            = "tools/coverity_auth-key.txt"
+        CERT_FILE           = "tools/coverity_CA_cert.pem"
+    }
+    
+    stages {
+        stage('Security Scanning') {
+            steps {
+                container('coverity-scan') {
+                    echo "Starting Coverity SAST scan on stream: ${env.COVERITY_STREAM}"
+                    // Place your project compilation and coverity scan commands here
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo "Pipeline run completed. Cleaning up ephemeral agent pods."
+        }
+    }
+}
+
+💡 Support Line: If you hit image compilation errors or need to patch the Coverity tool version, contact the platform team at ng-daas-dev.
+
