@@ -1,0 +1,257 @@
+## Jenkins Pipeline Best Practices on Kubernetes## 
+1.1. Multibranch Pipeline Best Practices## 
+
+1.1.1. Jenkinsfile Design
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+            apiVersion: v1
+            kind: Pod
+            spec:
+                containers:
+                - name: build
+                  image: maven:3.9-eclipse-temurin-17
+                  resources:
+                      requests:
+                          cpu: "500m"
+                          memory: "512Mi"
+                      limits:
+                          cpu: "2"
+                          memory: "2Gi"
+            '''
+            podRetention(never())
+            activeDeadlineSeconds(1800)
+            idleMinutes(0)
+        }
+    }
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        skipDefaultCheckout(true)
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: scm.branches,
+                    extensions: [
+                        [$class: 'CloneOption', depth: 1, shallow: true, noTags: true, timeout: 10],
+                        [$class: 'CleanBeforeCheckout']
+                    ],
+                    userRemoteConfigs: scm.userRemoteConfigs
+                ])
+            }
+        }
+        stage('Build') {
+            steps {
+                container('build') {
+                    sh 'mvn clean install'
+                }
+            }
+        }
+        stage('Tests') {
+            parallel {
+                stage('Unit') { 
+                    steps { container('build') { sh 'make unit-test' } } 
+                }
+                stage('Integration') { 
+                    steps { container('build') { sh 'make int-test' } } 
+                }
+            }
+        }
+    }
+    post {
+        always { junit '*/target/surefire-reports/*.xml' }
+        success { slackSend channel: '#ci', message: "✅ ${env.JOB_NAME} passed" }
+        failure { slackSend channel: '#ci', message: "❌ ${env.JOB_NAME} failed" }
+    }
+}
+
+## 1.1.2. Branch Management
+
+* Limit branch discovery: Only build branches matching patterns (e.g., main, dev, feature/, PR-) to avoid wasting resources.
+* Branch strategy: Auto-delete jobs for branches that no longer exist on the remote repository.
+* Use build Discarder: Keep only N recent builds per branch to save cluster master storage.
+* Disable concurrent builds: Prevent the same branch from running in parallel unless explicitly intended.
+
+## 1.1.3. Multibranch Configuration
+
+* ✅ Scan interval: Do not scan too frequently. Use webhooks instead.
+* ✅ Webhooks over polling: Configure GitHub or GitLab webhooks to trigger builds instantly.
+* ✅ Branch source traits: Filter systematically by name, pull request trust level, and discovery behaviours.
+
+------------------------------
+## 1.2. Shallow Clone (Reduce Git Overhead)
+Full git history is almost never needed for CI builds. Use shallow clone to save time, network bandwidth, and disk space.
+
+checkout([
+    $class: 'GitSCM',
+    branches: scm.branches,
+    extensions: [
+        [$class: 'CloneOption', depth: 1, shallow: true, noTags: true, timeout: 10],
+        [$class: 'CleanBeforeCheckout']
+    ],
+    userRemoteConfigs: scm.userRemoteConfigs
+])
+
+
+* depth: 1: Only fetch the latest commit instead of the full git history.
+* shallow: true: Enable shallow clone functionality.
+* noTags: true: Skip fetching tags to reduce metadata processing overhead.
+* timeout: 10: Fail fast if the cloning operation takes too long.
+
+------------------------------
+## 1.3. Right-Sizing Resources Using Kubernetes Dashboard
+Do not guess resource consumption. Measure execution footprints directly.
+## 1.3.1. ❌ Common Mistake
+Over-provisioning allocating fixed, large spaces wastes massive cluster capacity.
+## 1.3.2. Over-provisioned Blueprint
+
+resources:
+    requests:
+        cpu: "4"
+        memory: "8Gi"
+    limits:
+        cpu: "4"
+        memory: "8Gi"
+
+## 1.3.3. ✅ Right-Sizing Workflow## Step 1: Start with reasonable defaults
+
+resources:
+    requests:
+        cpu: "500m"
+        memory: "512Mi"
+    limits:
+        cpu: "2"
+        memory: "2Gi"
+
+## Step 2: Monitor actual usage Kubernetes Dashboard
+Get access to the dashboard by opening an access ticket to eng help disk..
+
+   1. Open the Kubernetes Dashboard provided by the eng helpdisk team.
+   2. Navigate directly to Workloads ➔ Pods.
+   3. Filter by your targeted Jenkins agent pods using namespace or labels.
+   4. Observe actual CPU and memory usage graphs over multiple concurrent builds.
+   5. Check the exact peak usage during heavy build, test, and image push stages.
+
+## Step 3: Adjust based on observed metrics
+
+* Actual CPU usage consistently < 30% of request: Lower your pod's CPU request block.
+* Pods getting OOMKilled: Increase memory limit configuration immediately.
+* Pods stuck in Pending state: Resource requests are too high. Lower requests or add more worker nodes.
+* Actual memory usage ~50% of limit: Healthy performance headroom. Keep settings as-is.
+* CPU throttling observed: Increase the CPU limit config or remove the CPU limit entirely.
+
+## Step 4: Set final values based on observations
+Example: After monitoring, the Maven build uses roughly ~800m CPU and ~1.2Gi RAM peak.
+
+resources:
+    requests:
+        cpu: "500m"
+        memory: "1Gi"
+    limits:
+        cpu: "2"
+        memory: "2Gi"
+
+------------------------------
+## 1.4. Avoid Unnecessary Resource Usage
+
+* Shallow clone: Avoids cloning gigabytes of historical git repository data.
+* Don't install tools at build time: Bake required binaries into custom agent images instead.
+* Avoid docker pull of large images every build: Utilize Kaniko step structures with --cache=true flag.
+* Don't run idle agent pods: Enforce podRetention(never()) so agent pods terminate instantly post-build.
+* Limit workspace size: Clean workspaces and don't archive unnecessary files.
+* Multi-stage container builds: Keep final system images small to reduce registry storage costs.
+* Prune Jenkins build history: Always use buildDiscarder(logRotator(numToKeepStr: '10')).
+* Avoid re-downloading dependencies: Mount a shared PersistentVolumeClaim (PVC) cache for Maven or npm.
+* Set timeouts: Kill runaway processes early using timeout(time: 30, unit: 'MINUTES').
+
+## 1.4.1. Agent Pod Anti-Pattern vs Best Practice## ❌ BAD — Installs tools every build
+Wastes time, package registry bandwidth, and processing cycles.
+
+container('build') {
+    sh '''
+    apt-get update && apt-get install -y curl jq maven
+    mvn clean install
+    '''
+}
+
+## ✅ GOOD — Tools pre-baked in image
+Nothing to download at runtime. Ready instantly.
+
+container('build') {
+    sh 'mvn clean install'
+}
+
+------------------------------
+## 1.5. Caching & Performance
+
+* Dependency cache: Mount a dedicated PVC or use a persistent cache volume for Maven .m2 or npm node_modules.
+* Docker layer caching: Use Kaniko or BuildKit coupled with a remote registry cache instead of dangerous Docker-in-Docker.
+* Parallel stages: Split large test or assembly suites into parallel stages executed across distinct container runtimes.
+* Slim images: Use minimal base execution images for agent containers to reduce network image pull times.
+
+------------------------------
+## 1.6. Container Build Strategy (Avoid Docker-in-Docker)
+
+* Kaniko: Rootless execution, requires no privileged Docker daemon background process. Safest for Kubernetes.
+* BuildKit: Highly performant, supports modern distributed caching structures, and works well in rootless modes.
+* Jib: Java-specific artifact creation, builds well-optimized container images directly without needing a Dockerfile.
+
+## 1.6.1. Kaniko Execution Template
+
+container('kaniko') {
+    sh '''
+    /kaniko/executor \
+        --context . \
+        --destination registry.example.com/my-app:${BUILD_NUMBER} \
+        --cache=true
+    '''
+}
+
+------------------------------
+## 1.7. Security
+
+* RBAC: Create a dedicated Kubernetes ServiceAccount for Jenkins agents configured with minimal required role scopes.
+* Credentials: Store enterprise secrets securely inside the Jenkins credentials store or HashiCorp Vault. Never hardcode keys.
+* Network policies: Restrict outbound agent pod network transport access to only known designated internal endpoints.
+* Pod security: Run containers as non-root profiles and systematically drop unnecessary security capabilities.
+
+securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+------------------------------
+## 1.8. Shared Libraries
+
+@Library('my-shared-lib@main') _
+myPipeline(appName: 'my-app', buildTool: 'maven')
+
+
+* ✅ Centralize pipeline logic: Standardize deployment definitions inside a shared library git repository.
+* ✅ Version the library: Explicitly target library code blocks using strict release tags or fixed branch scopes.
+* ✅ Avoid duplicating code: Do not replicate standard code sequences across distinct repository configurations.
+* ✅ Define common elements: Standardize global pod templates, validation stages, and messaging utility functions.
+
+------------------------------
+## 1.9. Pipeline Reliability
+
+* retry and timeout: Wrap inherently flaky communication steps in retry(3) and always set strict step-level timeout values.
+* post blocks: Always use post { always { } } structure for cleanups and execution notifications.
+* catchError: Prevent non-critical single stage pipeline crashes from blocking execution of vital resource cleanup hooks.
+* Idempotent steps: Ensure all underlying automated script actions can be safely executed multiple times.
+* Declarative over Scripted: Prefer declarative pipeline definitions to gain clear structural parsing and execution guardrails.
+
+------------------------------
+If you want to dive deeper into configuring specific steps, let me know:
+
+* Do you need assistance mapping the shared PVC cache for Maven (.m2) inside Kubernetes?
+* Would you like an example of the GitHub/GitLab webhook payload setup for Multibranch triggers?
+* Do you need assistance drafting the internal setup for the HashiCorp Vault secret plugin configuration?
+
+
