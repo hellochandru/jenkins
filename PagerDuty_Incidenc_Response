@@ -1,0 +1,246 @@
+## PagerDuty Incident Response and Escalation Playbook##
+1. Purpose
+This document defines how Prometheus alerts are routed to PagerDuty, how they are escalated, and what actions are expected from on-call engineers. It ensures alerts are handled promptly, consistently, and with clear thresholds across all environments.
+
+* Why this matters: When a system fails, engineers need a clear plan. This guide removes guesswork during an outage so the team can fix problems quickly.
+
+------------------------------
+## 2. PagerDuty Alert Types
+Different problems have different levels of urgency. We categorize them into three severity levels:
+
+| Alert Type | Severity | Action |
+|---|---|---|
+| Critical | 🔴 High | Immediate action by the primary on-call engineer. |
+| Warning | 🟠 Medium | Review within the hour. Escalate if unresolved. |
+| Info | 🟢 Low | Monitor without escalation unless trending upward. |
+
+## Simple Examples:
+
+* 🔴 Critical: The entire customer checkout website goes down.
+* 🟠 Warning: A hard drive is 85% full but still functioning.
+* 🟢 Info: A minor system update was successfully completed.
+
+------------------------------
+## 3. Escalation Workflow
+If an engineer is asleep or misses an alert, the system automatically routes the issue to a backup engineer to ensure it is not ignored.
+
+| Stage | Time | Action |
+|---|---|---|
+| Initial Alert | 0 min | PagerDuty notifies primary on-call via SMS, email, and mobile push. |
+| First Escalation | 15 min | If unacknowledged, escalates to the secondary on-call engineer. |
+
+------------------------------
+## 4. Testing the Escalation Policy
+We run practice drills where we trigger fake alerts. Team members must acknowledge these test incidents to confirm that their phones, apps, and notification paths are configured correctly and ready for real emergencies.
+------------------------------
+## 5. On-Call Responsibilities
+When you are the scheduled on-call engineer, you must follow these four steps:
+
+   1. Acknowledge alerts immediately: Click the "Acknowledge" button in PagerDuty so the team knows someone is looking at it.
+   2. Investigate, resolve, or escalate: Work to fix the issue. If you cannot fix it alone, call for backup.
+   3. Update documentation post-incident: Write down what broke and how you fixed it so others can learn.
+   4. Share learnings during team retrospectives: Talk about the incident in regular team meetings to prevent it from happening again.
+
+------------------------------
+## 6. Commands Used During Incident Response
+Use these common kubectl terminal commands to debug application issues running inside your Kubernetes cluster.
+
+# View all running applications (pods) in a specific workspace
+kubectl get pods -n <namespace>
+# View detailed system logs and status configuration for a broken pod
+kubectl describe pod -n <namespace>
+# Read the application print logs to see error messages
+kubectl logs -n <namespace>
+# Check the status of attached storage disks (Persistent Volume Claims)
+kubectl get pvc -n <namespace>
+# Check the total CPU and Memory performance usage of server nodes
+kubectl top nodes
+# Check which applications (pods) are eating up the most CPU and Memory
+kubectl top pods -n <namespace>
+
+------------------------------
+## 7. When to Escalate
+You must ask secondary on-call engineers or engineering managers for help immediately if you encounter any of these conditions:
+
+* System Unresponsive: The application or website is completely down or throwing errors for everyone.
+* Storage Crisis: Disk storage usage is over 80% and continuing to climb rapidly.
+* Database Lag: Database replication lag exceeds the defined safety threshold, meaning data backups are falling behind.
+* API Failures: High volume of network connection failures affecting multiple microservices at the same time.
+* Airflow Failures: The data pipeline scheduler stops running or worker nodes crash completely.
+* Logging Pipeline Failures: Logging tools stop ingesting logs, causing a blind spot where logs are being dropped.
+* Out Of Memory (OOM): System servers or applications are crashing because they ran completely out of RAM.
+
+------------------------------
+## 8. Active Alerts in PagerDuty
+
+| Alert Name | Severity | What It Covers | Notes / Explanation |
+|---|---|---|---|
+| DiskRunsOutOfSpaceIn3Days | 🟠 Warning | Disk space depletion projection | Smart mathematical prediction guessing the disk will fill up in 72 hours. |
+| DiskRunsOutOfSpace | 🔴 Critical | Disk usage > 80% | The drive is dangerously full right now. Performance issues are imminent. |
+| RequestErrorsToAPI | 🟠 Warning | High HTTP error rate | The system detected more than 50 failed web requests within 5 minutes. |
+| RPCErrors | 🟠 Warning | Internal network errors | Failure in internal service-to-service connection, dial, or handshakes. |
+| ConcurrentFlushesHitTheLimit | 🟠 Warning | High flush activity | Too much data is being written to disk at once, overloading the storage CPU. |
+| RowsRejectedOnIngestion | 🟠 Warning | Data ingestion issues | The database is throwing away incoming rows due to badly formatted data. |
+| TooHighChurnRate | 🟠 Warning | New metrics creation rate | New tracking data points are being created too fast, hurting database performance. |
+| TooHighChurnRate24h | 🟠 Warning | High churn over 24 hours | Continuous creation of too many new data series over a full day. |
+| TooHighSlowInsertsRate | 🟠 Warning | Slow inserts rate > 5% | Over 5% of database writes are slow. Indicates a RAM shortage or database overload. |
+| ProcessNearFDLimits | 🔴 Critical | File descriptor exhaustion | The application has opened too many files/sockets and will crash soon. |
+| LabelsLimitExceededOnIngestion | 🟠 Warning | Label limit exceeded | Bad configurations or client data models are sending too many labels. |
+| VminsertVmstorageConnectionIsSaturated | 🟠 Warning | Data component bottleneck | The connection between data-entry and data-storage is choked. Needs scaling. |
+| PodNotReady | 🔴 Critical | Application is down | An application container has been broken, stuck, or offline for over 5 minutes. |
+
+------------------------------
+## 9. Recommended Additions to PagerDuty Alerts
+These are suggested metric configurations to add to our monitoring rules to improve coverage across infrastructure layers.
+## Storage
+
+* PVC usage > 80% (🔴 Critical): High risk of application storage crashing.
+* Disk I/O latency (🟠 Warning): Disks are responding slowly, which degrades overall system performance.
+* Fragmentation / reclaim space warnings (🟠 Warning): The disk is storing data inefficiently and needs space cleanup.
+
+## Node Health
+
+* CPU usage > 85% sustained (🔴 Critical): Server processors are working too hard and creating a bottleneck.
+* Memory pressure over time (🟠/🔴 Mixed): Servers are running low on RAM. Severity changes depending on how fast memory disappears.
+* Node unreachable (🔴 Critical): A physical server host has gone completely offline. Requires immediate investigation.
+
+## Database
+
+* Connection failures (🟠 Warning): Applications are struggling to log into the database. Possible database downtime.
+* Transaction lock contention (🟠 Warning): Multiple database queries are fighting over the same data row, causing slow performance.
+* Query timeout rates (🟠 Warning): Queries are taking too long to finish, directly slowing down the user experience.
+
+## Network
+
+* DNS resolution failures (🟠 Warning): Internal services cannot look up names or find each other. Service discovery is broken.
+* Service endpoint unreachable (🔴 Critical): Core service web addresses are returning errors, impacting immediate availability.
+
+## Airflow
+
+* DAG failures count (🟠 Warning): Data processing workflows are failing to finish successfully.
+* Scheduler offline (🔴 Critical): The engine that schedules data jobs is dead. No automatic workflows will run.
+* Worker crash (🔴 Critical): The worker nodes executing data tasks have crashed. Task execution failure.
+
+## Logging
+
+* Fluent Bit ingestion errors (🟠 Warning): Log collection agents are hitting errors. Some logs might be missing.
+* Dropped logs (🟠 Warning): The logging engine cannot keep up with traffic and is throwing data away, causing incomplete observability.
+* Loki ingestion failures (🔴 Critical): The central logging system storage is completely broken.
+
+## Queue Monitoring
+
+* ASUPProcessorQueueStalled (🔴 Critical): Data processing queue depth has piled up to more than 5,000 items and has shown zero progress for 15 minutes.
+
+------------------------------
+## 10. Notes
+
+* Include Dashboards: Always paste relevant Grafana data metrics links directly into PagerDuty timeline comments so teammates can see the graphs immediately.
+* Tune Regularly: Review metric numbers every month to stop false alarms (alert fatigue).
+* Smart Grouping: Ensure PagerDuty groups notifications by service type (e.g., Database alerts grouped together, Network alerts grouped together) to keep notifications organized.
+* Keep Learning: Ensure new system outage takeaways are written directly back into this playbook document.
+
+------------------------------
+
+Here are the three additions to your playbook
+##############################################
+##############################################
+------------------------------
+## Part 1: Prometheus Alertmanager Rules (YAML)
+These configuration files tell Prometheus exactly when to look for a problem and pass it to PagerDuty.
+## 1. Prometheus Rule for PodNotReady
+
+apiVersion: ://coreos.comkind: PrometheusRulemetadata:
+  name: pod-not-ready-alert
+  namespace: monitoringspec:
+  groups:
+  - name: application-alerts
+    rules:
+    - alert: PodNotReady
+      # This checks if a pod is healthy. 0 means it is broken or down.
+      expr: kube_pod_status_ready{condition="true"} == 0
+      # The pod must be broken for 5 continuous minutes before triggering the alarm.
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Application pod {{ $labels.pod }} is down"
+        description: "The pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been offline for more than 5 minutes."
+
+## 2. Prometheus Rule for PVCUsageTooHigh (Storage Alert)
+
+apiVersion: ://coreos.comkind: PrometheusRulemetadata:
+  name: storage-alerts
+  namespace: monitoringspec:
+  groups:
+  - name: disk-alerts
+    rules:
+    - alert: PVCUsageTooHigh
+      # This divides used space by total space. If it is more than 0.80 (80%), it alerts.
+      expr: (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) > 0.80
+      for: 10m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Storage disk {{ $labels.persistentvolumeclaim }} is nearly full"
+        description: "Disk usage is over 80% for volume {{ $labels.persistentvolumeclaim }}."
+
+------------------------------
+## Part 2: Simple Post-Incident Review Template (Retrospective)
+Fill out this template within 48 hours after a major problem is fixed. It helps the team learn from mistakes.
+
+# Post-Incident Review (PIR)## 1. Summary (What happened?)* **Incident Name**: [Example: Production Database Outage]
+* **Date of Incident**: [YYYY-MM-DD]
+* **Total Downtime**: [Example: 45 minutes]
+* **Who was affected?**: [Example: Customers could not log into their profiles]
+## 2. Timeline (When did things happen?)* **14:00** - The database ran out of memory. The server crashed.* **14:05** - PagerDuty sent a 🔴 Critical alert to the primary on-call engineer.* **14:10** - The primary engineer acknowledged the alert and started checking logs.* **14:30** - The engineer restarted the service and scaled up the server RAM.* **14:45** - The website was fully working again. The incident was closed.
+## 3. Root Cause Analysis (Why did it happen?)* Why did the website stop working? Because the database crashed.* Why did the database crash? Because it ran out of RAM memory.* Why did it run out of RAM memory? Because a new software update caused a slow query that trapped data loops.
+## 4. Preventative Actions (How do we stop this from happening again?)* [ ] **Action 1**: Fix the slow software query code loop (Assigned to: John, Due: Next Friday).
+* [ ] **Action 2**: Increase the default database RAM limit by 4GiB (Assigned to: Sarah, Due: Tomorrow).
+* [ ] **Action 3**: Add an alert that warns us if database memory usage goes over 85%.
+
+------------------------------
+## Part 3: Step-by-Step Fixes for PodNotReady
+When you receive a PodNotReady alarm on your phone, copy and paste these exact commands into your terminal to diagnose and fix the problem.
+## Step 1: Find the broken pod
+Run this command to see a list of applications. Look at the STATUS or READY column to find the one showing errors.
+
+kubectl get pods -n <namespace>
+
+
+* What to look for: Look for statuses like CrashLoopBackOff, ImagePullBackOff, or Error.
+
+## Step 2: Check the recent history
+Run this command to see the timeline of events for that specific application container.
+
+kubectl describe pod <pod-name> -n <namespace>
+
+
+* How to read the output: Scroll down to the very bottom and look at the Events section. It will explicitly tell you if the system ran out of memory (OOMKilled) or if the network failed.
+
+## Step 3: Read the application print logs
+Run this command to read the exact error message printout from inside the code.
+
+kubectl logs <pod-name> -n <namespace> --tail=100
+
+
+* How to read the output: Look at the last 100 lines for programming code errors, missing database connection keys, or password failures.
+
+## Step 4: Common fixes you can try
+If you find the issue using the steps above, try these quick remediation actions:
+
+* If the application is frozen: Force it to reboot by deleting it. Kubernetes will immediately start a fresh, new one automatically:
+
+kubectl delete pod <pod-name> -n <namespace>
+
+* If it ran out of memory (OOMKilled): You need to give it more room to breathe. Edit the deployment file and increase the memory configurations:
+
+kubectl edit deployment <deployment-name> -n <namespace>
+
+(Scroll to the resources.limits.memory section and change it to a higher number, like changing 2Gi to 4Gi).
+
+
+
+
+
+
+
